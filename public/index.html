@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Google Maps Business Scraper</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <h1>Google Maps Business Scraper</h1>
+    <p>Scrape business data from Google Maps & export to Excel</p>
+  </div>
+</header>
+
+<div class="container">
+  <div class="card">
+    <h2>Select State to Scrape</h2>
+    <div class="row">
+      <div class="form-group">
+        <label for="stateSelect">US State</label>
+        <select id="stateSelect">
+          <option value="">-- Select a state --</option>
+        </select>
+      </div>
+      <div class="form-group" id="citySelectGroup" style="display:none;">
+        <label>Select Cities <span id="cityCount">(0 selected)</span></label>
+        <div id="cityCheckboxes" class="city-list"></div>
+        <div class="city-actions">
+          <button type="button" class="btn btn-sm" id="selectAllBtn">Select All</button>
+          <button type="button" class="btn btn-sm" id="deselectAllBtn">Deselect All</button>
+        </div>
+      </div>
+      <div class="form-group" style="display:flex;align-items:flex-end;">
+        <button id="startBtn" class="btn btn-primary" disabled>Start Scraping</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="progressSection" class="card progress-section">
+    <h2>Scraping Progress</h2>
+
+    <div class="stats-grid">
+      <div class="stat-item">
+        <div class="stat-value" id="statProgress">0%</div>
+        <div class="stat-label">Progress</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value" id="statCities">0/0</div>
+        <div class="stat-label">Cities</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value" id="statBusinesses">0</div>
+        <div class="stat-label">Businesses Found</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value" id="statStatus">Idle</div>
+        <div class="stat-label">Status</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value" id="statElapsed">--</div>
+        <div class="stat-label">Elapsed</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value" id="statEta">--</div>
+        <div class="stat-label">ETA Remaining</div>
+      </div>
+    </div>
+
+    <div class="progress-bar-container">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+
+    <div id="cityStatus"></div>
+
+    <div class="log-container" id="logContainer">
+      <div class="log-entry info">Waiting to start...</div>
+    </div>
+
+    <div class="btn-group" style="margin-top:12px;">
+      <button id="downloadBtn" class="btn btn-success" style="display:none;">
+        Download Excel
+      </button>
+      <button id="cancelBtn" class="btn btn-danger" style="display:none;">
+        Cancel
+      </button>
+    </div>
+  </div>
+
+  <div id="resultsSection" class="card" style="display:none;">
+    <h2>Scraped Results</h2>
+    <div class="table-container">
+      <table id="resultsTable">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>City</th>
+            <th>Company</th>
+            <th>Phone 1</th>
+            <th>Phone 2</th>
+            <th>Email 1</th>
+            <th>Email 2</th>
+            <th>Email 3</th>
+            <th>Email 4</th>
+            <th>Email 5</th>
+            <th>Website</th>
+          </tr>
+        </thead>
+        <tbody id="resultsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="script.js"></script>
+</body>
+</html>

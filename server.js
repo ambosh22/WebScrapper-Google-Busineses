@@ -1,0 +1,355 @@
+const express = require('express');
+const XLSX = require('xlsx');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const { spawn } = require('child_process');
+
+const app = express();
+app.use(express.json());
+app.use(express.static('public'));
+
+const PORT = process.env.PORT || 3000;
+const JOBS_DIR = path.join(__dirname, 'jobs');
+if (!fs.existsSync(JOBS_DIR)) fs.mkdirSync(JOBS_DIR);
+
+const CITIES = {
+  "Alabama": ["Birmingham","Montgomery","Mobile","Huntsville","Tuscaloosa","Hoover","Auburn","Dothan","Madison","Decatur","Florence","Gadsden","Vestavia Hills","Prattville","Phenix City"],
+  "Alaska": ["Anchorage","Fairbanks","Juneau","Wasilla","Kenai","Palmer","Homer","Sitka","Ketchikan","Bethel","Soldotna","Unalaska","Valdez","Cordova","North Pole"],
+  "Arizona": ["Phoenix","Tucson","Mesa","Chandler","Gilbert","Glendale","Scottsdale","Peoria","Tempe","Surprise","Flagstaff","Prescott","Yuma","Avondale","Goodyear"],
+  "Arkansas": ["Little Rock","Fayetteville","Fort Smith","Springdale","Jonesboro","Rogers","Conway","North Little Rock","Bentonville","Pine Bluff","Hot Springs","Benton","Texarkana","Sherwood","Jacksonville"],
+  "California": ["Los Angeles","San Diego","San Jose","San Francisco","Fresno","Sacramento","Long Beach","Oakland","Bakersfield","Anaheim","Riverside","Santa Ana","Irvine","Stockton","San Bernardino"],
+  "Colorado": ["Denver","Colorado Springs","Aurora","Fort Collins","Lakewood","Boulder","Greeley","Longmont","Loveland","Grand Junction","Pueblo","Arvada","Westminster","Thornton","Centennial"],
+  "Connecticut": ["Bridgeport","New Haven","Hartford","Stamford","Waterbury","Norwalk","Danbury","New Britain","Bristol","Meriden","Milford","Middletown","West Hartford","Groton","Torrington"],
+  "Delaware": ["Wilmington","Dover","Newark","Middletown","Smyrna","Milford","Seaford","Georgetown","Elsmere","New Castle","Laurel","Harrington","Lewes","Rehoboth Beach","Clayton"],
+  "Florida": ["Jacksonville","Miami","Tampa","Orlando","St. Petersburg","Hialeah","Fort Lauderdale","Tallahassee","Cape Coral","Port St. Lucie","Pembroke Pines","Hollywood","Gainesville","Miramar","Coral Springs"],
+  "Georgia": ["Atlanta","Augusta","Columbus","Savannah","Athens","Sandy Springs","Macon","Roswell","Albany","Johns Creek","Warner Robins","Valdosta","Alpharetta","Marietta","Smyrna"],
+  "Hawaii": ["Honolulu","Hilo","Kailua","Kapolei","Kahului","Kihei","Lihue","Pearl City","Waipahu","Mililani","Ewa Beach","Kaneohe","Wailuku","Lahaina","Schofield Barracks"],
+  "Idaho": ["Boise","Meridian","Nampa","Idaho Falls","Caldwell","Pocatello","Coeur d'Alene","Twin Falls","Lewiston","Post Falls","Moscow","Rexburg","Eagle","Kuna","Ammon"],
+  "Illinois": ["Chicago","Aurora","Rockford","Joliet","Naperville","Springfield","Peoria","Elgin","Waukegan","Champaign","Bloomington","Decatur","Evanston","Schaumburg","Arlington Heights"],
+  "Indiana": ["Indianapolis","Fort Wayne","Evansville","South Bend","Carmel","Bloomington","Fishers","Hammond","Gary","Lafayette","Muncie","Terre Haute","Kokomo","Anderson","Elkhart"],
+  "Iowa": ["Des Moines","Cedar Rapids","Davenport","Sioux City","Iowa City","Waterloo","Council Bluffs","Ames","West Des Moines","Dubuque","Ankeny","Urbandale","Cedar Falls","Marion","Bettendorf"],
+  "Kansas": ["Wichita","Overland Park","Kansas City","Olathe","Topeka","Lawrence","Shawnee","Manhattan","Lenexa","Salina","Hutchinson","Leavenworth","Leawood","Dodge City","Garden City"],
+  "Kentucky": ["Louisville","Lexington","Bowling Green","Owensboro","Covington","Richmond","Georgetown","Florence","Hopkinsville","Nicholasville","Frankfort","Henderson","Paducah","Jeffersontown","Ashland"],
+  "Louisiana": ["New Orleans","Baton Rouge","Shreveport","Lafayette","Lake Charles","Kenner","Bossier City","Monroe","Alexandria","Houma","Slidell","Gretna","New Iberia","Ruston","Hammond"],
+  "Maine": ["Portland","Lewiston","Bangor","South Portland","Auburn","Biddeford","Augusta","Waterville","Saco","Westbrook","Brewer","Brunswick","Old Town","Caribou","Ellsworth"],
+  "Maryland": ["Baltimore","Frederick","Rockville","Gaithersburg","Bowie","Hagerstown","Annapolis","College Park","Salisbury","Laurel","Greenbelt","Cumberland","Westminster","Elkton","Aberdeen"],
+  "Massachusetts": ["Boston","Worcester","Springfield","Cambridge","Lowell","Brockton","New Bedford","Fall River","Lynn","Quincy","Newton","Lawrence","Somerville","Framingham","Haverhill"],
+  "Michigan": ["Detroit","Grand Rapids","Warren","Sterling Heights","Ann Arbor","Lansing","Flint","Dearborn","Livonia","Troy","Farmington Hills","Kalamazoo","Wyoming","Southfield","Rochester Hills"],
+  "Minnesota": ["Minneapolis","Saint Paul","Rochester","Duluth","Bloomington","Brooklyn Park","Plymouth","Woodbury","Lakeville","St. Cloud","Maple Grove","Eagan","Burnsville","Eden Prairie","Coon Rapids"],
+  "Mississippi": ["Jackson","Gulfport","Southaven","Hattiesburg","Biloxi","Olive Branch","Tupelo","Meridian","Greenville","Clinton","Madison","Pearl","Oxford","Horn Lake","Starkville"],
+  "Missouri": ["Kansas City","St. Louis","Springfield","Columbia","Independence","Lee's Summit","O'Fallon","St. Charles","Blue Springs","St. Joseph","Joplin","Florissant","Cape Girardeau","Wentzville","Wildwood"],
+  "Montana": ["Billings","Missoula","Great Falls","Bozeman","Butte","Helena","Kalispell","Havre","Anaconda","Miles City","Belgrade","Livingston","Whitefish","Lewistown","Sidney"],
+  "Nebraska": ["Omaha","Lincoln","Bellevue","Grand Island","Kearney","Fremont","Norfolk","North Platte","Hastings","Columbus","Papillion","La Vista","Scottsbluff","South Sioux City","Beatrice"],
+  "Nevada": ["Las Vegas","Henderson","Reno","North Las Vegas","Sparks","Carson City","Elko","Mesquite","Boulder City","Fallon","Winnemucca","Fernley","Pahrump","Dayton","Lovelock"],
+  "New Hampshire": ["Manchester","Nashua","Concord","Derry","Dover","Rochester","Salem","Keene","Berlin","Laconia","Claremont","Lebanon","Portsmouth","Franklin","Somersworth"],
+  "New Jersey": ["Newark","Jersey City","Paterson","Elizabeth","Edison","Trenton","Woodbridge","Camden","Clifton","Passaic","Union City","East Orange","Bayonne","Vineland","Hackensack"],
+  "New Mexico": ["Albuquerque","Las Cruces","Rio Rancho","Santa Fe","Roswell","Farmington","Hobbs","Clovis","Carlsbad","Alamogordo","Gallup","Los Lunas","Deming","Portales","Las Vegas"],
+  "New York": ["New York","Buffalo","Rochester","Syracuse","Albany","Yonkers","New Rochelle","Mount Vernon","Utica","Schenectady","Binghamton","Niagara Falls","Troy","Saratoga Springs","Poughkeepsie"],
+  "North Carolina": ["Charlotte","Raleigh","Greensboro","Durham","Winston-Salem","Fayetteville","Cary","Wilmington","High Point","Asheville","Greenville","Concord","Gastonia","Jacksonville","Chapel Hill"],
+  "North Dakota": ["Fargo","Bismarck","Grand Forks","Minot","West Fargo","Williston","Dickinson","Mandan","Jamestown","Wahpeton","Devils Lake","Grafton","Lincoln","Beulah","Valley City"],
+  "Ohio": ["Columbus","Cleveland","Cincinnati","Toledo","Akron","Dayton","Parma","Canton","Youngstown","Lorain","Hamilton","Springfield","Kettering","Elyria","Lakewood"],
+  "Oklahoma": ["Oklahoma City","Tulsa","Norman","Broken Arrow","Edmond","Lawton","Moore","Midwest City","Enid","Stillwater","Muskogee","Bartlesville","Owasso","Shawnee","Ponca City"],
+  "Oregon": ["Portland","Salem","Eugene","Gresham","Hillsboro","Beaverton","Bend","Medford","Springfield","Corvallis","Albany","Tigard","Lake Oswego","Keizer","Grants Pass"],
+  "Pennsylvania": ["Philadelphia","Pittsburgh","Allentown","Erie","Reading","Scranton","Bethlehem","Lancaster","Harrisburg","York","Wilkes-Barre","Altoona","State College","Chester","Norristown"],
+  "Rhode Island": ["Providence","Warwick","Cranston","Pawtucket","East Providence","Woonsocket","Newport","Central Falls","Westerly","Bristol","Coventry","North Providence","South Kingstown","Barrington","Smithfield"],
+  "South Carolina": ["Columbia","Charleston","North Charleston","Mount Pleasant","Rock Hill","Greenville","Summerville","Spartanburg","Sumter","Hilton Head Island","Florence","Goose Creek","Aiken","Myrtle Beach","Anderson"],
+  "South Dakota": ["Sioux Falls","Rapid City","Aberdeen","Brookings","Watertown","Mitchell","Yankton","Pierre","Spearfish","Huron","Vermillion","Brandon","Box Elder","Madison","Sturgis"],
+  "Tennessee": ["Nashville","Memphis","Knoxville","Chattanooga","Clarksville","Murfreesboro","Franklin","Jackson","Johnson City","Bartlett","Hendersonville","Kingsport","Smyrna","Cleveland","Brentwood"],
+  "Texas": ["Houston","San Antonio","Dallas","Austin","Fort Worth","El Paso","Arlington","Corpus Christi","Plano","Lubbock","Garland","Irving","Amarillo","Grand Prairie","Brownsville"],
+  "Utah": ["Salt Lake City","West Valley City","Provo","St. George","Ogden","Sandy","Orem","Layton","South Jordan","Lehi","Logan","Murray","Taylorsville","Draper","Bountiful"],
+  "Vermont": ["Burlington","South Burlington","Rutland","Barre","Montpelier","Essex","Saint Albans","Winooski","Bennington","Brattleboro","Colchester","Hartford","Stowe","Springfield","Middlebury"],
+  "Virginia": ["Virginia Beach","Norfolk","Chesapeake","Richmond","Newport News","Alexandria","Hampton","Roanoke","Portsmouth","Suffolk","Lynchburg","Harrisonburg","Charlottesville","Danville","Manassas"],
+  "Washington": ["Seattle","Spokane","Tacoma","Vancouver","Bellevue","Kent","Everett","Renton","Spokane Valley","Federal Way","Yakima","Bellingham","Auburn","Kennewick","Pasco"],
+  "West Virginia": ["Charleston","Huntington","Morgantown","Parkersburg","Wheeling","Weirton","Fairmont","Beckley","Clarksburg","Martinsburg","South Charleston","Bluefield","Princeton","Vienna","Bridgeport"],
+  "Wisconsin": ["Milwaukee","Madison","Green Bay","Kenosha","Racine","Appleton","Waukesha","Eau Claire","Oshkosh","Janesville","West Allis","La Crosse","Sheboygan","Wauwatosa","Fond du Lac"],
+  "Wyoming": ["Cheyenne","Casper","Laramie","Gillette","Rock Springs","Sheridan","Green River","Evanston","Riverton","Jackson","Cody","Rawlins","Lander","Powell","Douglas"]
+};
+
+const jobs = {};
+
+function genId() {
+  return Date.now().toString(36) + crypto.randomBytes(4).toString('hex');
+}
+
+function logEntry(jobId, message, type = 'info') {
+  if (jobs[jobId]) {
+    jobs[jobId].logs.push({ message, type, time: new Date().toISOString() });
+  }
+}
+
+function runPythonScraper(state, cities, maxPerCity, jobId) {
+  return new Promise((resolve, reject) => {
+    const citiesStr = cities.join(',');
+    const maxStr = String(maxPerCity);
+
+    const proc = spawn('python3', [
+      path.join(__dirname, 'scraper.py'),
+      '--state', state,
+      '--cities', citiesStr,
+      '--max', maxStr,
+      '--parallel-cities', '2'
+    ]);
+
+    let stdout = '';
+    let stderrBuffer = '';
+
+    function parseStderrLine(line) {
+      if (!line.trim()) return;
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.type === 'progress' && jobs[jobId]) {
+          jobs[jobId].completedCities = parsed.index || 0;
+          jobs[jobId].progress = parsed.percent || 0;
+          jobs[jobId].elapsedSecs = parsed.elapsed_secs || 0;
+          if (parsed.total_businesses) jobs[jobId].totalBusinesses = parsed.total_businesses;
+        } else if (parsed.type === 'business' && jobs[jobId] && parsed.entry) {
+          jobs[jobId].data.push(parsed.entry);
+        } else if (parsed.type === 'business_update' && jobs[jobId] && parsed.entry && parsed.index != null) {
+          jobs[jobId].data[parsed.index] = parsed.entry;
+        } else if (jobs[jobId]) {
+          const type = parsed.type === 'success' ? 'success' : parsed.type === 'error' ? 'error' : 'info';
+          jobs[jobId].logs.push({ message: parsed.message || line, type, time: new Date().toISOString() });
+          if (jobs[jobId].logs.length > 500) jobs[jobId].logs = jobs[jobId].logs.slice(-500);
+        }
+      } catch {
+        if (jobs[jobId]) {
+          jobs[jobId].logs.push({ message: line, type: 'info', time: new Date().toISOString() });
+          if (jobs[jobId].logs.length > 500) jobs[jobId].logs = jobs[jobId].logs.slice(-500);
+        }
+      }
+    }
+
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    proc.stderr.on('data', (data) => {
+      stderrBuffer += data.toString();
+      const lines = stderrBuffer.split('\n');
+      stderrBuffer = lines.pop() || '';
+      lines.forEach(parseStderrLine);
+    });
+
+    proc.on('close', (code) => {
+      if (stderrBuffer.trim()) parseStderrLine(stderrBuffer);
+
+      if (code !== 0) {
+        if (jobs[jobId]) jobs[jobId].status = 'error';
+        reject(new Error(`Python scraper exited with code ${code}`));
+        return;
+      }
+
+      try {
+        const data = JSON.parse(stdout);
+        resolve({ data });
+      } catch (e) {
+        if (jobs[jobId]) jobs[jobId].status = 'error';
+        reject(new Error(`Failed to parse Python output: ${e.message}`));
+      }
+    });
+
+    proc.on('error', (err) => {
+      if (jobs[jobId]) jobs[jobId].status = 'error';
+      reject(new Error(`Failed to start Python scraper: ${err.message}`));
+    });
+
+    setTimeout(() => {
+      proc.kill();
+      if (jobs[jobId]) jobs[jobId].status = 'error';
+      reject(new Error('Python scraper timed out after 1 hour'));
+    }, 3600000);
+  });
+}
+
+app.post('/api/scrape', async (req, res) => {
+  const { state, cities: selectedCities } = req.body;
+  if (!state || !CITIES[state]) {
+    return res.status(400).json({ error: 'Invalid state selected' });
+  }
+
+  const allCities = CITIES[state];
+  const targetCities = selectedCities && selectedCities.length > 0
+    ? selectedCities
+    : allCities;
+
+  const jobId = genId();
+  jobs[jobId] = {
+    state,
+    status: 'running',
+    cities: targetCities,
+    progress: 0,
+    totalCities: targetCities.length,
+    completedCities: 0,
+    data: [],
+    totalBusinesses: 0,
+    logs: [],
+    startTime: Date.now(),
+    elapsedSecs: 0,
+    createdAt: new Date().toISOString()
+  };
+
+  logEntry(jobId, `Starting scrape for ${state} (${targetCities.length} cities)`, 'info');
+
+  res.json({ jobId, totalCities: targetCities.length });
+
+  scrapeRunner(jobId, state, targetCities).catch(err => {
+    logEntry(jobId, `Fatal error: ${err.message}`, 'error');
+    if (jobs[jobId]) jobs[jobId].status = 'error';
+  });
+});
+
+async function scrapeRunner(jobId, state, cities) {
+  try {
+    logEntry(jobId, 'Launching Python Playwright scraper...', 'info');
+
+    const result = await runPythonScraper(state, cities, 999, jobId);
+
+    if (jobs[jobId]) {
+      jobs[jobId].data = result.data || [];
+      jobs[jobId].completedCities = cities.length;
+      jobs[jobId].progress = 100;
+    }
+  } catch (err) {
+    logEntry(jobId, `Scraper error: ${err.message}`, 'error');
+    if (jobs[jobId]) jobs[jobId].status = 'error';
+    return;
+  }
+
+  if (jobs[jobId] && jobs[jobId].status !== 'cancelled') {
+    jobs[jobId].status = 'completed';
+
+    const filename = `businesses_${state.replace(/\s+/g, '_')}_${jobId}.xlsx`;
+    const filepath = path.join(JOBS_DIR, filename);
+
+    try {
+      const workbook = XLSX.utils.book_new();
+      const data = jobs[jobId].data.length > 0
+        ? jobs[jobId].data
+        : [{ city: '', company: '', phone1: '', phone2: '', email1: '', email2: '', email3: '', email4: '', email5: '', website: '' }];
+      const worksheet = XLSX.utils.json_to_sheet(data);
+
+      const headers = ['City', 'Company Name', 'Phone 1', 'Phone 2', 'Email 1', 'Email 2', 'Email 3', 'Email 4', 'Email 5', 'Website'];
+      XLSX.utils.sheet_add_aoa(worksheet, [headers], { origin: 'A1' });
+
+      const colWidths = [
+        { wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 18 },
+        { wch: 35 }, { wch: 35 }, { wch: 35 }, { wch: 35 }, { wch: 35 },
+        { wch: 40 }
+      ];
+      worksheet['!cols'] = colWidths;
+
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Businesses');
+      XLSX.writeFile(workbook, filepath);
+
+      jobs[jobId].filename = filename;
+      jobs[jobId].filepath = filepath;
+      logEntry(jobId, `Excel file generated: ${filename}`, 'success');
+      logEntry(jobId, `Total businesses scraped: ${jobs[jobId].data.length}`, 'success');
+    } catch (err) {
+      logEntry(jobId, `Failed to generate Excel: ${err.message}`, 'error');
+      jobs[jobId].status = 'error';
+    }
+  }
+}
+
+app.get('/api/progress/:jobId', (req, res) => {
+  const job = jobs[req.params.jobId];
+  if (!job) return res.json({ status: 'not_found' });
+
+  const now = Date.now();
+  const elapsed = Math.floor((now - (job.startTime || now)) / 1000);
+  const progressPct = job.progress || 0;
+  let eta = null;
+  if (progressPct > 0 && progressPct < 100) {
+    const totalEstimated = Math.floor(elapsed / (progressPct / 100));
+    eta = Math.max(0, totalEstimated - elapsed);
+  }
+
+  res.json({
+    status: job.status,
+    progress: job.progress,
+    cities: job.cities,
+    totalCities: job.totalCities,
+    completedCities: job.completedCities,
+    totalBusinesses: job.status === 'running' ? (job.totalBusinesses || 0) : job.data.length,
+    logs: job.logs.slice(-100),
+    filename: job.filename || null,
+    elapsedSecs: elapsed,
+    etaSecs: eta
+  });
+});
+
+app.get('/api/download/:jobId', (req, res) => {
+  const job = jobs[req.params.jobId];
+  if (!job || !job.filename) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  const filepath = path.join(JOBS_DIR, job.filename);
+  if (!fs.existsSync(filepath)) {
+    return res.status(404).json({ error: 'File not found on disk' });
+  }
+
+  res.download(filepath, `Businesses_${job.state.replace(/\s+/g, '_')}.xlsx`);
+});
+
+function generateExcelForJob(jobId, job) {
+  const filename = `businesses_${job.state.replace(/\s+/g, '_')}_${jobId}.xlsx`;
+  const filepath = path.join(JOBS_DIR, filename);
+  try {
+    const workbook = XLSX.utils.book_new();
+    const data = job.data.length > 0
+      ? job.data
+      : [{ city: '', company: '', phone1: '', phone2: '', email1: '', email2: '', email3: '', email4: '', email5: '', website: '' }];
+    const worksheet = XLSX.utils.json_to_sheet(data);
+    const headers = ['City', 'Company Name', 'Phone 1', 'Phone 2', 'Email 1', 'Email 2', 'Email 3', 'Email 4', 'Email 5', 'Website'];
+    XLSX.utils.sheet_add_aoa(worksheet, [headers], { origin: 'A1' });
+    worksheet['!cols'] = [
+      { wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 18 },
+      { wch: 35 }, { wch: 35 }, { wch: 35 }, { wch: 35 }, { wch: 35 },
+      { wch: 40 }
+    ];
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Businesses');
+    XLSX.writeFile(workbook, filepath);
+    job.filename = filename;
+    job.filepath = filepath;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+app.post('/api/cancel/:jobId', (req, res) => {
+  const job = jobs[req.params.jobId];
+  if (job && job.status === 'running') {
+    job.status = 'cancelled';
+    const ok = generateExcelForJob(req.params.jobId, job);
+    if (ok && job.data.length > 0) {
+      res.json({ status: 'cancelled', filename: job.filename, totalBusinesses: job.data.length });
+    } else {
+      res.json({ status: 'cancelled', totalBusinesses: 0 });
+    }
+  } else {
+    res.json({ status: job ? job.status : 'not_found' });
+  }
+});
+
+app.get('/api/cities', (req, res) => {
+  const state = req.query.state;
+  if (state && CITIES[state]) {
+    res.json(CITIES[state]);
+  } else {
+    res.json([]);
+  }
+});
+
+app.get('/api/states', (req, res) => {
+  res.json(Object.keys(CITIES));
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Network access: http://0.0.0.0:${PORT}`);
+  console.log(`Python scraper: ${path.join(__dirname, 'scraper.py')}`);
+});
