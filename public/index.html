@@ -3,38 +3,76 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Google Maps Business Scraper</title>
+  <title>Business Lead Scraper</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <header>
   <div class="container">
-    <h1>Google Maps Business Scraper</h1>
+    <h1>Business Lead Scraper</h1>
     <p>Scrape business data from Google Maps & export to Excel</p>
   </div>
 </header>
 
 <div class="container">
   <div class="card">
-    <h2>Select State to Scrape</h2>
-    <div class="row">
-      <div class="form-group">
-        <label for="stateSelect">US State</label>
+    <h2>Start a New Scrape</h2>
+
+    <div class="step">
+      <div class="step-number">1</div>
+      <div class="step-content">
+        <label for="stateSelect">Select US State</label>
         <select id="stateSelect">
           <option value="">-- Select a state --</option>
         </select>
       </div>
-      <div class="form-group" id="citySelectGroup" style="display:none;">
-        <label>Select Cities <span id="cityCount">(0 selected)</span></label>
+    </div>
+
+    <div class="step" id="cityStep" style="display:none;">
+      <div class="step-number">2</div>
+      <div class="step-content">
+        <label>Choose Cities <span id="cityCount">(0 selected)</span></label>
         <div id="cityCheckboxes" class="city-list"></div>
         <div class="city-actions">
           <button type="button" class="btn btn-sm" id="selectAllBtn">Select All</button>
           <button type="button" class="btn btn-sm" id="deselectAllBtn">Deselect All</button>
         </div>
       </div>
-      <div class="form-group" style="display:flex;align-items:flex-end;">
-        <button id="startBtn" class="btn btn-primary" disabled>Start Scraping</button>
+    </div>
+
+    <div class="step" id="nicheStep" style="display:none;">
+      <div class="step-number">3</div>
+      <div class="step-content">
+        <label for="nicheInput">Business Niche / Category</label>
+        <input type="text" id="nicheInput" placeholder="e.g. coffee shop, restaurant, dentist, plumber..." value="businesses">
+        <div class="niche-suggestions">
+          <span class="niche-label">Quick picks:</span>
+          <button type="button" class="niche-chip" data-niche="businesses">All Businesses</button>
+          <button type="button" class="niche-chip" data-niche="coffee shop">Coffee Shop</button>
+          <button type="button" class="niche-chip" data-niche="restaurant">Restaurant</button>
+          <button type="button" class="niche-chip" data-niche="dentist">Dentist</button>
+          <button type="button" class="niche-chip" data-niche="salon">Salon / Barber</button>
+          <button type="button" class="niche-chip" data-niche="plumber">Plumber</button>
+          <button type="button" class="niche-chip" data-niche="gym">Gym / Fitness</button>
+          <button type="button" class="niche-chip" data-niche="lawyer">Lawyer</button>
+          <button type="button" class="niche-chip" data-niche="real estate agent">Real Estate</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="step" id="goStep" style="display:none;">
+      <div class="step-number"></div>
+      <div class="step-content">
+        <button id="startBtn" class="btn btn-primary btn-lg" disabled>
+          <span class="btn-icon">&#9654;</span> Start Scraping
+        </button>
+        <div id="estimateBox" class="estimate-box">
+          <div class="estimate-row">
+            <span class="estimate-icon">&#128202;</span>
+            <span id="estimateText">Loading estimate...</span>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -49,11 +87,11 @@
       </div>
       <div class="stat-item">
         <div class="stat-value" id="statCities">0/0</div>
-        <div class="stat-label">Cities</div>
+        <div class="stat-label">Cities Done</div>
       </div>
       <div class="stat-item">
         <div class="stat-value" id="statBusinesses">0</div>
-        <div class="stat-label">Businesses Found</div>
+        <div class="stat-label">Leads Found</div>
       </div>
       <div class="stat-item">
         <div class="stat-value" id="statStatus">Idle</div>
@@ -65,7 +103,7 @@
       </div>
       <div class="stat-item">
         <div class="stat-value" id="statEta">--</div>
-        <div class="stat-label">ETA Remaining</div>
+        <div class="stat-label">ETA</div>
       </div>
     </div>
 
@@ -80,36 +118,12 @@
     </div>
 
     <div class="btn-group" style="margin-top:12px;">
-      <button id="downloadBtn" class="btn btn-success" style="display:none;">
+      <button id="downloadBtn" class="btn btn-success">
         Download Excel
       </button>
-      <button id="cancelBtn" class="btn btn-danger" style="display:none;">
+      <button id="cancelBtn" class="btn btn-danger">
         Cancel
       </button>
-    </div>
-  </div>
-
-  <div id="resultsSection" class="card" style="display:none;">
-    <h2>Scraped Results</h2>
-    <div class="table-container">
-      <table id="resultsTable">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>City</th>
-            <th>Company</th>
-            <th>Phone 1</th>
-            <th>Phone 2</th>
-            <th>Email 1</th>
-            <th>Email 2</th>
-            <th>Email 3</th>
-            <th>Email 4</th>
-            <th>Email 5</th>
-            <th>Website</th>
-          </tr>
-        </thead>
-        <tbody id="resultsBody"></tbody>
-      </table>
     </div>
   </div>
 </div>

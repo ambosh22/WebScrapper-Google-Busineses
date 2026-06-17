@@ -1,0 +1,9 @@
+# Proxy List — one proxy per line
+# If empty/file missing, free proxies will be auto-fetched from public lists
+#
+# Formats supported:
+#   http://user:pass@host:port
+#   http://host:port
+#   socks5://user:pass@host:port
+#
+# Add your own proxies below (these will be used instead of free ones):

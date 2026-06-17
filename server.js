@@ -78,7 +78,7 @@ function logEntry(jobId, message, type = 'info') {
   }
 }
 
-function runPythonScraper(state, cities, maxPerCity, jobId) {
+function runPythonScraper(state, cities, niche, maxPerCity, jobId, maxTotal = 1000) {
   return new Promise((resolve, reject) => {
     const citiesStr = cities.join(',');
     const maxStr = String(maxPerCity);
@@ -87,7 +87,9 @@ function runPythonScraper(state, cities, maxPerCity, jobId) {
       path.join(__dirname, 'scraper.py'),
       '--state', state,
       '--cities', citiesStr,
+      '--niche', niche,
       '--max', maxStr,
+      '--max-total', String(maxTotal),
       '--parallel-cities', '2'
     ]);
 
@@ -163,7 +165,7 @@ function runPythonScraper(state, cities, maxPerCity, jobId) {
 }
 
 app.post('/api/scrape', async (req, res) => {
-  const { state, cities: selectedCities } = req.body;
+  const { state, cities: selectedCities, niche } = req.body;
   if (!state || !CITIES[state]) {
     return res.status(400).json({ error: 'Invalid state selected' });
   }
@@ -193,17 +195,18 @@ app.post('/api/scrape', async (req, res) => {
 
   res.json({ jobId, totalCities: targetCities.length });
 
-  scrapeRunner(jobId, state, targetCities).catch(err => {
+  const activeNiche = (niche && niche.trim()) ? niche.trim() : 'businesses';
+  scrapeRunner(jobId, state, targetCities, activeNiche).catch(err => {
     logEntry(jobId, `Fatal error: ${err.message}`, 'error');
     if (jobs[jobId]) jobs[jobId].status = 'error';
   });
 });
 
-async function scrapeRunner(jobId, state, cities) {
+async function scrapeRunner(jobId, state, cities, niche = 'businesses') {
   try {
-    logEntry(jobId, 'Launching Python Playwright scraper...', 'info');
+    logEntry(jobId, `Launching Python Playwright scraper for '${niche}'...`, 'info');
 
-    const result = await runPythonScraper(state, cities, 999, jobId);
+    const result = await runPythonScraper(state, cities, niche, 200, jobId, 1000);
 
     if (jobs[jobId]) {
       jobs[jobId].data = result.data || [];
@@ -347,6 +350,20 @@ app.get('/api/cities', (req, res) => {
 app.get('/api/states', (req, res) => {
   res.json(Object.keys(CITIES));
 });
+
+app.get('/api/estimate', (req, res) => {
+  res.json({ maxLeads: 1000 });
+});
+
+const PROXY_FILE = path.join(__dirname, 'proxies.txt');
+try {
+  if (fs.existsSync(PROXY_FILE)) {
+    const proxyCount = fs.readFileSync(PROXY_FILE, 'utf-8').split('\n').filter(l => l.trim() && !l.startsWith('#')).length;
+    console.log(`Proxies: ${proxyCount} proxy entries found in proxies.txt`);
+  } else {
+    console.log('Proxies: no proxies.txt — running direct connections');
+  }
+} catch {}
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on http://localhost:${PORT}`);

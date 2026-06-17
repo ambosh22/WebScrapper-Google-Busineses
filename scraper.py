@@ -1,11 +1,36 @@
 #!/usr/bin/env python3
-import sys, json, re, asyncio, argparse, time, urllib.parse
+import sys, json, re, asyncio, argparse, time, urllib.parse, random, os, urllib.request, ssl
 
 try:
     from playwright.async_api import async_playwright
 except ImportError:
     print("Install: pip install playwright && playwright install chromium", file=sys.stderr)
     sys.exit(1)
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+]
+
+VIEWPORTS = [
+    {"width": 1920, "height": 1080},
+    {"width": 1920, "height": 1040},
+    {"width": 1366, "height": 768},
+    {"width": 1440, "height": 900},
+    {"width": 1536, "height": 864},
+    {"width": 1280, "height": 800},
+]
+
+PROXIES = []
+PROXY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxies.txt")
+
+
+async def rand_sleep(min_s=0.3, max_s=1.2):
+    await asyncio.sleep(random.uniform(min_s, max_s))
 
 
 def log(msg, type="info"):
@@ -63,13 +88,80 @@ def clean_website_url(href):
     return href.split("?")[0].rstrip('/')
 
 
+FREE_PROXY_URLS = [
+    "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
+    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+    "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt",
+    "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",
+]
+
+
+def fetch_free_proxies():
+    proxies = set()
+    ctx = ssl._create_unverified_context()
+    for url in FREE_PROXY_URLS:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}, method="GET")
+            with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                raw = resp.read().decode("utf-8")
+                for line in raw.splitlines():
+                    line = line.strip().lower()
+                    if line and ":" in line and not line.startswith("#"):
+                        proxies.add(f"http://{line}")
+            log(f"Fetched proxies from {url.split('/')[2]}", "info")
+        except Exception as e:
+            log(f"Failed to fetch {url.split('/')[2]}: {str(e)[:50]}", "error")
+    return list(proxies)
+
+
+def load_proxies():
+    if os.path.exists(PROXY_FILE):
+        proxies = []
+        with open(PROXY_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    proxies.append(line)
+        if proxies:
+            log(f"Loaded {len(proxies)} proxies from proxies.txt", "info")
+            return proxies
+        log("proxies.txt empty — fetching free proxies...", "info")
+    else:
+        log("No proxies.txt — fetching free proxies from public lists...", "info")
+
+    free_proxies = fetch_free_proxies()
+    if free_proxies:
+        log(f"Fetched {len(free_proxies)} free proxies (may be slow/unreliable)", "info")
+        return free_proxies
+
+    log("No proxies available — running direct connections", "info")
+    return []
+
+PROXIES[:] = load_proxies()
+
+
+def get_proxy():
+    if PROXIES:
+        return random.choice(PROXIES)
+    return None
+
+
+def get_context_kwargs():
+    ua = random.choice(USER_AGENTS)
+    vp = random.choice(VIEWPORTS)
+    kwargs = {"user_agent": ua, "viewport": vp}
+    proxy = get_proxy()
+    if proxy:
+        kwargs["proxy"] = {"server": proxy}
+    return kwargs
+
+
 CONTACT_PATHS = ["", "/contact", "/contact-us", "/about", "/about-us", "/contactus", "/get-in-touch"]
 
 
 async def fetch_website_data(ctx, url):
-    """Visit website pages and extract phones + emails."""
     page = await ctx.new_page()
-    phones, emails = [], []
+    phones, emails = [], set()
     try:
         parsed = urllib.parse.urlparse(url.rstrip('/'))
         base_domain = f"{parsed.scheme}://{parsed.netloc}"
@@ -78,68 +170,80 @@ async def fetch_website_data(ctx, url):
             try:
                 target = url if not path else base_domain + path
                 await page.goto(target, wait_until="domcontentloaded", timeout=10000)
-                await asyncio.sleep(0.5)
+                await rand_sleep(0.5, 1.0)
                 text = await page.inner_text("body")
                 for p in extract_phones(text):
                     if p not in phones:
                         phones.append(p)
                 for e in extract_emails(text):
-                    if e not in emails:
-                        emails.append(e)
+                    emails.add(e)
                 for el in await page.locator('a[href^="mailto:"]').all():
                     href = await el.get_attribute("href")
                     if href:
                         e = href.replace("mailto:", "").split("?")[0].strip()
-                        if e and "@" in e and e not in emails:
-                            emails.append(e)
+                        if e and "@" in e:
+                            emails.add(e)
             except:
                 pass
     except:
         pass
     await page.close()
-    return phones[:4], emails[:5]
+    return phones[:4], list(emails)[:5]
 
 
-async def scrape_city(browser, city, state, max_count=999):
-    ctx = await browser.new_context(
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        viewport={"width": 1920, "height": 1080}
-    )
+async def scrape_city(browser, city, state, niche="businesses", max_count=999, max_total=1000, current_total=0, seen_phones=None, seen_name_city=None):
+    if seen_phones is None:
+        seen_phones = set()
+    if seen_name_city is None:
+        seen_name_city = set()
+
+    ctx = await browser.new_context(**get_context_kwargs())
     page = await ctx.new_page()
     results = []
     try:
-        search_url = f"https://www.google.com/maps/search/businesses+in+{city},+{state}/"
-        await page.goto(search_url, wait_until="domcontentloaded", timeout=20000)
-        await asyncio.sleep(2)
+        query = urllib.parse.quote(niche.replace(" ", "+"))
+        search_url = f"https://www.google.com/maps/search/{query}+in+{city},+{state}/"
+        await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+        await rand_sleep(1.5, 3.0)
 
         try:
-            await page.wait_for_selector('[class*="Nv2PK"]', timeout=10000)
+            await page.wait_for_selector('[class*="Nv2PK"]', timeout=15000)
         except:
             log(f"No results for {city}", "error")
             return results
 
         prev_count = 0
-        for _ in range(15):
+        no_progress = 0
+        for _ in range(20):
             try:
-                await page.evaluate('document.querySelector("[role=feed]")?.scrollBy(0, 1500)')
+                await page.evaluate('document.querySelector("[role=feed]")?.scrollBy(0, 1800)')
             except:
                 pass
-            await asyncio.sleep(0.4)
+            await rand_sleep(0.4, 0.9)
             cards = page.locator('[class*="Nv2PK"]')
             cur = await cards.count()
-            if cur == prev_count and _ > 3:
-                break
+            if cur == prev_count:
+                no_progress += 1
+                if no_progress >= 4:
+                    break
+            else:
+                no_progress = 0
             prev_count = cur
 
-        await asyncio.sleep(1)
+        await rand_sleep(0.8, 1.5)
 
         cards = page.locator('[class*="Nv2PK"]')
         total = await cards.count()
-        limit = min(total, max_count)
+        limit = min(total, max_count, max_total - current_total)
+        if limit <= 0:
+            return results
         log(f"Found {limit} businesses in {city}", "info")
 
         for i in range(limit):
             try:
+                if current_total + len(results) >= max_total:
+                    break
+
                 card_text = await cards.nth(i).inner_text()
                 lines = [l.strip() for l in card_text.split('\n') if l.strip()]
                 name = lines[0] if lines else "Unknown"
@@ -156,6 +260,24 @@ async def scrape_city(browser, city, state, max_count=999):
                         seen_10.add(k)
                         phones.append(p)
 
+                phone_key = None
+                for p in phones:
+                    digits = re.sub(r'[^\d]', '', p)
+                    if len(digits) >= 10:
+                        phone_key = digits[-10:]
+                        break
+
+                name_city_key = (name.lower().strip(), city.lower().strip())
+
+                is_dup = (phone_key and phone_key in seen_phones) or (name_city_key in seen_name_city)
+                if is_dup:
+                    log(f"  [{i+1}/{limit}] Skipped duplicate: {name}", "info")
+                    continue
+
+                if phone_key:
+                    seen_phones.add(phone_key)
+                seen_name_city.add(name_city_key)
+
                 website = ""
                 card_link = cards.nth(i).locator('a[href*="http"]')
                 if await card_link.count() > 0:
@@ -168,12 +290,12 @@ async def scrape_city(browser, city, state, max_count=999):
                         website = clean_website_url(href)
 
                 await cards.nth(i).click()
-                await asyncio.sleep(0.8)
+                await rand_sleep(0.6, 1.5)
 
                 emails = []
                 try:
                     await page.keyboard.press("Escape")
-                    await asyncio.sleep(0.3)
+                    await rand_sleep(0.2, 0.5)
                     body_text = await page.inner_text("body")
                     for e in extract_emails(body_text):
                         if e not in emails:
@@ -203,6 +325,7 @@ async def scrape_city(browser, city, state, max_count=999):
                 results.append(entry)
                 print(json.dumps({"type": "business", "entry": entry}), file=sys.stderr, flush=True)
                 log(f"  [{i+1}/{limit}] {name} - p:{entry['phone1'] or 'no'} e:{entry['email1'] or 'no'}", "success")
+                await rand_sleep(0.2, 0.6)
 
             except Exception as e:
                 log(f"  [{i+1}] Error: {str(e)[:80]}", "error")
@@ -216,7 +339,6 @@ async def scrape_city(browser, city, state, max_count=999):
 
 
 async def enrich_from_websites(browser, results):
-    """Visit business websites to get more phones and emails."""
     unique_urls = {}
     for i, r in enumerate(results):
         w = r.get("website", "").strip()
@@ -229,13 +351,10 @@ async def enrich_from_websites(browser, results):
     if not unique_urls:
         return
 
-    ctx = await browser.new_context(
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        viewport={"width": 1280, "height": 800}
-    )
+    ctx = await browser.new_context(**get_context_kwargs())
 
     domains = list(unique_urls.keys())
-    sem = asyncio.Semaphore(4)
+    sem = asyncio.Semaphore(3)
     enriched = 0
 
     async def process_domain(domain):
@@ -292,16 +411,22 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--state", required=True)
     parser.add_argument("--cities", required=True)
-    parser.add_argument("--max", type=int, default=999)
+    parser.add_argument("--niche", type=str, default="businesses")
+    parser.add_argument("--max", type=int, default=200)
+    parser.add_argument("--max-total", type=int, default=1000)
     parser.add_argument("--parallel-cities", type=int, default=3)
     args = parser.parse_args()
 
     cities = [c.strip() for c in args.cities.split(",") if c.strip()]
     total = len(cities)
 
-    log(f"Scraping {args.state} ({total} cities, all businesses, {args.parallel_cities}x parallel)", "info")
+    proxy_status = f"{len(PROXIES)} proxies" if PROXIES else "no proxies (direct)"
+    log(f"Scraping {args.state} for '{args.niche}' ({total} cities, max {args.max_total} total, {args.parallel_cities}x parallel, {proxy_status})", "info")
     start_time = time.time()
     all_results = []
+    seen_phones = set()
+    seen_name_city = set()
+    total_count = 0
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -311,24 +436,37 @@ async def main():
         )
 
         for batch_start in range(0, len(cities), args.parallel_cities):
+            if total_count >= args.max_total:
+                break
             batch = cities[batch_start:batch_start + args.parallel_cities]
 
             async def scrape_one(city):
-                results = await scrape_city(browser, city, args.state, args.max)
+                results = await scrape_city(browser, city, args.state,
+                                            niche=args.niche,
+                                            max_count=args.max,
+                                            max_total=args.max_total,
+                                            current_total=total_count,
+                                            seen_phones=seen_phones,
+                                            seen_name_city=seen_name_city)
                 return city, results
 
             batch_results = await asyncio.gather(*[scrape_one(c) for c in batch])
 
             for city, city_results in batch_results:
                 all_results.extend(city_results)
+                total_count = len(all_results)
                 idx = cities.index(city) + 1
                 elapsed = time.time() - start_time
                 progress = {
                     "type": "progress", "city": city, "index": idx, "total": total,
-                    "businesses": len(city_results), "total_businesses": len(all_results),
-                    "percent": round((idx / total) * 100), "elapsed_secs": round(elapsed)
+                    "businesses": len(city_results), "total_businesses": total_count,
+                    "percent": min(100, round((total_count / args.max_total) * 100)) if args.max_total else 0,
+                    "elapsed_secs": round(elapsed)
                 }
                 print(json.dumps(progress), file=sys.stderr, flush=True)
+                if total_count >= args.max_total:
+                    log(f"Reached max total of {args.max_total} businesses, stopping.", "info")
+                    break
 
         if all_results:
             log(f"Enriching from websites ({len(all_results)} businesses)...", "info")

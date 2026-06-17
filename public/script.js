@@ -21,7 +21,7 @@ async function loadStates() {
       opt.textContent = s;
       select.appendChild(opt);
     });
-  } catch (err) {
+  } catch {
     showToast('Failed to load states list');
   }
 }
@@ -33,20 +33,35 @@ function setupEventListeners() {
   document.getElementById('cancelBtn').addEventListener('click', cancelScraping);
   document.getElementById('selectAllBtn').addEventListener('click', () => selectAllCities(true));
   document.getElementById('deselectAllBtn').addEventListener('click', () => selectAllCities(false));
+  document.getElementById('nicheInput').addEventListener('input', onNicheChange);
+  document.querySelectorAll('.niche-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById('nicheInput').value = btn.dataset.niche;
+      document.querySelectorAll('.niche-chip').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      updateStartBtn();
+    });
+  });
 }
 
 async function onStateChange() {
   const state = document.getElementById('stateSelect').value;
   document.getElementById('startBtn').disabled = !state;
-  const group = document.getElementById('citySelectGroup');
-  if (!state) { group.style.display = 'none'; return; }
+  const cityStep = document.getElementById('cityStep');
+  const nicheStep = document.getElementById('nicheStep');
+  const goStep = document.getElementById('goStep');
+
+  if (!state) {
+    cityStep.style.display = 'none';
+    nicheStep.style.display = 'none';
+    goStep.style.display = 'none';
+    return;
+  }
 
   try {
-    const res = await fetch('/api/states');
-    const allStates = await res.json();
-    const res2 = await fetch('/api/cities?state=' + encodeURIComponent(state));
-    const cities = await res2.json();
-    if (!cities || cities.length === 0) { group.style.display = 'none'; return; }
+    const res = await fetch('/api/cities?state=' + encodeURIComponent(state));
+    const cities = await res.json();
+    if (!cities || cities.length === 0) { cityStep.style.display = 'none'; return; }
 
     stateCities[state] = cities;
     const container = document.getElementById('cityCheckboxes');
@@ -54,9 +69,12 @@ async function onStateChange() {
       `<label class="city-checkbox"><input type="checkbox" value="${c}" checked> ${c}</label>`
     ).join('');
     updateCityCount();
-    group.style.display = 'block';
+    cityStep.style.display = 'flex';
+    nicheStep.style.display = 'flex';
+    goStep.style.display = 'flex';
+    updateStartBtn();
   } catch {
-    group.style.display = 'none';
+    cityStep.style.display = 'none';
   }
 }
 
@@ -68,6 +86,38 @@ function selectAllCities(checked) {
 function updateCityCount() {
   const checked = document.querySelectorAll('#cityCheckboxes input:checked').length;
   document.getElementById('cityCount').textContent = `(${checked} selected)`;
+  updateEstimate();
+}
+
+let maxLeads = 1000;
+
+async function updateEstimate() {
+  try {
+    const res = await fetch('/api/estimate');
+    const data = await res.json();
+    if (data.maxLeads) maxLeads = data.maxLeads;
+  } catch {}
+  const cities = getSelectedCities().length;
+  const niche = document.getElementById('nicheInput').value.trim() || 'businesses';
+  const box = document.getElementById('estimateBox');
+  const text = document.getElementById('estimateText');
+  if (!cities || !niche) { box.style.display = 'none'; return; }
+  box.style.display = 'flex';
+  const perCity = Math.round(maxLeads / cities);
+  text.innerHTML = `<strong>${maxLeads.toLocaleString()}</strong> max leads from <strong>${cities}</strong> ${cities === 1 ? 'city' : 'cities'} &middot; ~${perCity} per city &middot; <span class="estimate-dedup">no duplicates</span>`;
+}
+
+function onNicheChange() {
+  document.querySelectorAll('.niche-chip').forEach(b => b.classList.remove('active'));
+  updateStartBtn();
+}
+
+function updateStartBtn() {
+  const state = document.getElementById('stateSelect').value;
+  const cities = getSelectedCities();
+  const niche = document.getElementById('nicheInput').value.trim();
+  document.getElementById('startBtn').disabled = !state || cities.length === 0 || !niche;
+  updateEstimate();
 }
 
 function getSelectedCities() {
@@ -77,21 +127,21 @@ function getSelectedCities() {
 async function startScraping() {
   const state = document.getElementById('stateSelect').value;
   const cities = getSelectedCities();
-  if (!state || cities.length === 0) { showToast('Select a state and at least 1 city'); return; }
+  const niche = document.getElementById('nicheInput').value.trim() || 'businesses';
+  if (!state || cities.length === 0 || !niche) { showToast('Complete all steps first'); return; }
 
   setUIState('scraping');
 
   document.getElementById('progressSection').classList.add('active');
   document.getElementById('downloadBtn').style.display = 'none';
   document.getElementById('cancelBtn').style.display = 'inline-block';
-  document.getElementById('resultsSection').style.display = 'none';
   document.getElementById('logContainer').innerHTML = '<div class="log-entry info">Starting scrape...</div>';
 
   try {
     const res = await fetch('/api/scrape', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ state, cities })
+      body: JSON.stringify({ state, cities, niche })
     });
 
     const data = await res.json();
@@ -103,7 +153,7 @@ async function startScraping() {
     }
 
     currentJobId = data.jobId;
-    addLog('info', `Scrape started for ${state} (${data.totalCities} cities)`);
+    addLog('info', `Scraping "${niche}" in ${state} (${data.totalCities} cities)`);
     updateCityStatus(data.totalCities);
 
     pollInterval = setInterval(() => pollProgress(), 1500);
@@ -151,7 +201,7 @@ async function pollProgress() {
       }
       document.getElementById('cancelBtn').style.display = 'none';
       setUIState('completed');
-      showToast(`Done! ${data.totalBusinesses} businesses found.`);
+      showToast(`Done! ${data.totalBusinesses} leads found.`);
     } else if (data.status === 'error') {
       document.getElementById('statStatus').textContent = 'Error';
       document.getElementById('statStatus').style.color = '#9b2c2c';
@@ -167,7 +217,7 @@ async function pollProgress() {
       document.getElementById('cancelBtn').style.display = 'none';
       if (data.filename) {
         document.getElementById('downloadBtn').style.display = 'inline-block';
-        showToast(`Cancelled. ${data.totalBusinesses} businesses saved.`);
+        showToast(`Cancelled. ${data.totalBusinesses} leads saved.`);
       } else {
         setUIState('idle');
         showToast('No data to download.');
@@ -181,7 +231,7 @@ async function pollProgress() {
       ).join('');
       container.scrollTop = container.scrollHeight;
     }
-  } catch (err) {
+  } catch {
   }
 }
 
@@ -225,17 +275,12 @@ function setUIState(state) {
     btn.disabled = true;
     btn.textContent = 'Scraping...';
     select.disabled = true;
-    if (group) group.querySelectorAll('input').forEach(el => el.disabled = true);
-  } else if (state === 'completed') {
-    btn.disabled = false;
-    btn.textContent = 'Start Scraping';
-    select.disabled = false;
-    if (group) group.querySelectorAll('input').forEach(el => el.disabled = false);
+    document.querySelectorAll('.city-checkbox input, .niche-chip, #nicheInput').forEach(el => el.disabled = true);
   } else {
     btn.disabled = false;
-    btn.textContent = 'Start Scraping';
+    btn.innerHTML = '<span class="btn-icon">&#9654;</span> Start Scraping';
     select.disabled = false;
-    if (group) group.querySelectorAll('input').forEach(el => el.disabled = false);
+    document.querySelectorAll('.city-checkbox input, .niche-chip, #nicheInput').forEach(el => el.disabled = false);
   }
 }
 
