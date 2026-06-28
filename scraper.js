@@ -251,6 +251,7 @@ async function runScraper({ state, cities, niche, maxPerCity, maxTotal, onProgre
 
   const browser = await chromium.launch({
     headless: true,
+    timeout: 45000,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-web-security'],
   });
 
