@@ -161,7 +161,7 @@ async function fetchWebsiteData(ctx, url) {
     const domain = parsed.hostname.replace(/^www\./, '');
     const queue = CONTACT_PATHS.map(p => base + p);
 
-    while (queue.length > 0 && emails.size < 2 && visited.size < 6) {
+    while (queue.length > 0 && emails.size < 3 && visited.size < 8) {
       const target = queue.shift();
       if (visited.has(target)) continue;
       visited.add(target);
@@ -175,9 +175,9 @@ async function fetchWebsiteData(ctx, url) {
         const { phones: newPhones, emails: newEmails } = await extractPageData(wp);
         for (const ph of newPhones) if (!phones.includes(ph)) phones.push(ph);
         for (const em of newEmails) emails.add(em);
-        if (emails.size >= 2) break;
+        if (emails.size >= 3) break;
 
-        if (visited.size < 4) {
+        if (visited.size < 6) {
           try {
             const links = await discoverLinks(wp, domain);
             const prioritized = links.filter(l => CONTACT_KEYWORDS.test(l));
@@ -192,7 +192,7 @@ async function fetchWebsiteData(ctx, url) {
       } catch {}
     }
 
-    if (emails.size < 2 && !visited.has(url)) {
+    if (emails.size < 3 && !visited.has(url)) {
       try {
         await wp.goto(url, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT });
         await randSleep(0.3, 0.6);
@@ -203,7 +203,7 @@ async function fetchWebsiteData(ctx, url) {
     }
   } catch {}
   await wp.close();
-  return { phones: phones.slice(0, 2), emails: [...emails].slice(0, 5) };
+  return { phones: phones.slice(0, 3), emails: [...emails].slice(0, 5) };
   })();
   return Promise.race([work, timer]);
 }
@@ -371,11 +371,15 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
           }
         }
 
-        const phonesFmt = phones.slice(0, 1).map(formatPhone);
+        const phonesFmt = phones.slice(0, 3).map(formatPhone);
         const entry = {
           city, company: name,
-          phone: phonesFmt[0] || '',
-          email: emails[0] || '',
+          email1: emails[0] || '',
+          email2: emails[1] || '',
+          email3: emails[2] || '',
+          phone1: phonesFmt[0] || '',
+          phone2: phonesFmt[1] || '',
+          phone3: phonesFmt[2] || '',
           website,
         };
         results.push(entry);
