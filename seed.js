@@ -1,24 +1,14 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const User = require('./models/User');
 
 async function seed() {
   await mongoose.connect(process.env.MONGODB_URI);
   console.log('Connected to MongoDB');
 
-  // ============================================================
-  // Idagdag mo dito ang bagong user accounts.
-  // Format: { username: '...', password: '...' }
-  // Pwede mag-add ng kasing dami mo gusto, basta comma-separated.
-  // ============================================================
   const users = [
-    { username: 'admin', password: 'admin@123' },
-
-    // 👇 Halimbawa ng bagong accounts — palitan mo ng totoong
-    //    username/password, o burahin kung hindi kailangan.
-    { username: 'newuser1', password: 'ChangeThisPassword1' },
-    { username: 'newuser2', password: 'ChangeThisPassword2' },
+    { username: 'admin', password: 'admin123' },
   ];
 
   for (const u of users) {
@@ -27,6 +17,7 @@ async function seed() {
     if (existing) {
       if (existing.role !== role) {
         existing.role = role;
+        existing.password = await bcrypt.hash(u.password, 10);
         await existing.save();
         console.log(`User "${u.username}" updated to role "${role}"`);
       } else {
