@@ -492,16 +492,15 @@ async function scrapeRunner(userId, jobId, state, cities, niche = 'businesses') 
       const workbook = XLSX.utils.book_new();
       const data = jobs[jobId].data.length > 0
         ? jobs[jobId].data
-        : [{ city: '', company: '', phone1: '', phone2: '', email1: '', email2: '', email3: '', email4: '', email5: '', website: '' }];
+        : [{ city: '', company: '', phone: '', email: '', website: '' }];
       const worksheet = XLSX.utils.json_to_sheet(data);
 
-      const headers = ['City', 'Company Name', 'Email 1', 'Email 2', 'Email 3', 'Email 4', 'Email 5', 'Phone 1', 'Phone 2', 'Website'];
+      const headers = ['City', 'Company Name', 'Phone', 'Email', 'Website'];
       XLSX.utils.sheet_add_aoa(worksheet, [headers], { origin: 'A1' });
 
       const colWidths = [
         { wch: 20 }, { wch: 35 },
-        { wch: 35 }, { wch: 35 }, { wch: 35 }, { wch: 35 }, { wch: 35 },
-        { wch: 18 }, { wch: 18 },
+        { wch: 18 }, { wch: 40 },
         { wch: 40 }
       ];
       worksheet['!cols'] = colWidths;
@@ -569,14 +568,13 @@ function generateExcelForJob(jobId, job) {
     const workbook = XLSX.utils.book_new();
     const data = job.data.length > 0
       ? job.data
-      : [{ city: '', company: '', email1: '', email2: '', email3: '', email4: '', email5: '', phone1: '', phone2: '', website: '' }];
+      : [{ city: '', company: '', phone: '', email: '', website: '' }];
     const worksheet = XLSX.utils.json_to_sheet(data);
-    const headers = ['City', 'Company Name', 'Email 1', 'Email 2', 'Email 3', 'Email 4', 'Email 5', 'Phone 1', 'Phone 2', 'Website'];
+    const headers = ['City', 'Company Name', 'Phone', 'Email', 'Website'];
     XLSX.utils.sheet_add_aoa(worksheet, [headers], { origin: 'A1' });
     worksheet['!cols'] = [
       { wch: 20 }, { wch: 35 },
-      { wch: 35 }, { wch: 35 }, { wch: 35 }, { wch: 35 }, { wch: 35 },
-      { wch: 18 }, { wch: 18 },
+      { wch: 18 }, { wch: 40 },
       { wch: 40 }
     ];
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Businesses');

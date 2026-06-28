@@ -75,20 +75,24 @@ function cleanWebsiteUrl(href) {
   return href.split('?')[0].replace(/\/$/, '');
 }
 
-const CONTACT_PATHS = ['/contact', '/about', '/contact-us', '/about-us', '/get-in-touch'];
-
 async function fetchWebsiteData(ctx, url) {
   const wp = await ctx.newPage();
   const phones = [];
   const emails = new Set();
+  const visited = new Set();
+  const queue = [url];
   try {
     const parsed = new URL(url);
-    const baseDomain = `${parsed.protocol}//${parsed.host}`;
-    for (const p of CONTACT_PATHS) {
+    const maxPages = 8;
+
+    while (queue.length > 0 && emails.size < 3 && visited.size < maxPages) {
+      const target = queue.shift();
+      if (visited.has(target)) continue;
+      visited.add(target);
       try {
-        await wp.goto(baseDomain + p, { waitUntil: 'domcontentloaded', timeout: 8000 });
-        await randSleep(0.3, 0.6);
-        try { await wp.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); await randSleep(0.2, 0.4); } catch {}
+        await wp.goto(target, { waitUntil: 'domcontentloaded', timeout: 8000 });
+        await randSleep(0.2, 0.5);
+        try { await wp.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); await randSleep(0.2, 0.3); } catch {}
         const text = await wp.evaluate(() => document.body.innerText || document.documentElement.outerText || '');
         for (const ph of extractPhones(text)) if (!phones.includes(ph)) phones.push(ph);
         for (const em of extractEmails(text)) emails.add(em);
@@ -104,7 +108,29 @@ async function fetchWebsiteData(ctx, url) {
           const html = await wp.evaluate(() => document.documentElement.outerHTML);
           for (const em of extractEmails(html)) emails.add(em);
         } catch {}
-        if (emails.size >= 2) break;
+
+        if (emails.size < 3 && visited.size < maxPages) {
+          try {
+            const links = await wp.evaluate((domain) => {
+              const result = [];
+              const anchors = document.querySelectorAll('a[href]');
+              for (const a of anchors) {
+                try {
+                  const href = a.href.split('#')[0].split('?')[0].replace(/\/$/, '');
+                  const u = new URL(href);
+                  if (u.hostname === domain && !result.includes(href) && !href.match(/\.(pdf|doc|docx|xls|xlsx|zip|tar|gz|png|jpg|jpeg|gif|svg|css|js|json|xml|mp4|mp3)$/i)) {
+                    const skip = ['/wp-content', '/wp-includes', '/wp-json', '/cdn-cgi', 'facebook.com', 'twitter.com', 'linkedin.com', 'instagram.com', 'youtube.com'];
+                    if (!skip.some(s => href.includes(s))) result.push(href);
+                  }
+                } catch {}
+              }
+              return result;
+            }, parsed.hostname);
+            for (const link of links) {
+              if (!visited.has(link) && !queue.includes(link)) queue.push(link);
+            }
+          } catch {}
+        }
       } catch {}
     }
   } catch {}
@@ -244,12 +270,11 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
           } catch {}
         }
 
-        const phonesFmt = phones.slice(0, 4).map(formatPhone);
+        const phonesFmt = phones.slice(0, 1).map(formatPhone);
         const entry = {
           city, company: name,
-          email1: emails[0] || '', email2: emails[1] || '', email3: emails[2] || '',
-          email4: emails[3] || '', email5: emails[4] || '',
-          phone1: phonesFmt[0] || '', phone2: phonesFmt[1] || '',
+          phone: phonesFmt[0] || '',
+          email: emails[0] || '',
           website,
         };
         results.push(entry);
