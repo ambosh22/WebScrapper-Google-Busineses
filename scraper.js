@@ -75,7 +75,7 @@ function cleanWebsiteUrl(href) {
   return href.split('?')[0].replace(/\/$/, '');
 }
 
-const CONTACT_PATHS = ['', '/contact', '/contact-us', '/about', '/about-us', '/contactus', '/get-in-touch'];
+const CONTACT_PATHS = ['/contact', '/about'];
 
 async function fetchWebsiteData(page, url) {
   const phones = [];
@@ -85,10 +85,7 @@ async function fetchWebsiteData(page, url) {
     const baseDomain = `${parsed.protocol}//${parsed.host}`;
     for (const p of CONTACT_PATHS) {
       try {
-        const target = p ? baseDomain + p : url;
-        await page.goto(target, { waitUntil: 'load', timeout: 15000 });
-        await randSleep(0.5, 1.0);
-        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        await page.goto(baseDomain + p, { waitUntil: 'domcontentloaded', timeout: 8000 });
         await randSleep(0.3, 0.6);
         const text = await page.evaluate(() => document.body.innerText);
         for (const ph of extractPhones(text)) if (!phones.includes(ph)) phones.push(ph);
@@ -98,13 +95,14 @@ async function fetchWebsiteData(page, url) {
           const href = await el.getAttribute('href');
           if (href) {
             const e = href.replace('mailto:', '').split('?')[0].trim();
-            if (e && e.includes('@')) emails.add(e);
+            if (e && e.includes('@') && !emails.has(e.toLowerCase())) emails.add(e);
           }
         }
+        if (emails.size >= 2) break;
       } catch {}
     }
   } catch {}
-  return { phones: phones.slice(0, 4), emails: [...emails].slice(0, 5) };
+  return { phones: phones.slice(0, 2), emails: [...emails].slice(0, 3) };
 }
 
 async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, currentTotal, seenPhones, seenNameCity, onProgress) {
@@ -127,11 +125,11 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
     }
 
     let prevCount = 0;
-    for (let s = 0; s < 20; s++) {
-      try { await page.evaluate(() => document.querySelector('[role=feed]')?.scrollBy(0, 1800)); } catch {}
-      await randSleep(0.4, 0.9);
+    for (let s = 0; s < 12; s++) {
+      try { await page.evaluate(() => document.querySelector('[role=feed]')?.scrollBy(0, 2500)); } catch {}
+      await randSleep(0.3, 0.6);
       const cur = await page.locator('[class*="Nv2PK"]').count();
-      if (s > 3 && cur === prevCount) break;
+      if (s > 2 && cur === prevCount) break;
       prevCount = cur;
     }
 
@@ -168,13 +166,13 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
         seenNameCity.add(nameCityKey);
 
         await cards.nth(i).click();
-        await randSleep(0.6, 1.5);
+        await randSleep(0.3, 0.8);
 
         const emails = [];
         let website = '';
         try {
           await page.keyboard.press('Escape');
-          await randSleep(0.2, 0.5);
+          await randSleep(0.1, 0.3);
           const bodyText = await page.evaluate(() => document.body.innerText);
 
           for (const e of extractEmails(bodyText)) if (!emails.includes(e)) emails.push(e);
@@ -256,7 +254,7 @@ async function runScraper({ state, cities, niche, maxPerCity, maxTotal, onProgre
   });
 
   try {
-    const parallel = 2;
+    const parallel = 3;
     for (let i = 0; i < cities.length; i += parallel) {
       if (allResults.length >= maxTotal) break;
       const batch = cities.slice(i, i + parallel);
