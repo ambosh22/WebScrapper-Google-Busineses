@@ -125,16 +125,8 @@ def load_proxies():
         if proxies:
             log(f"Loaded {len(proxies)} proxies from proxies.txt", "info")
             return proxies
-        log("proxies.txt empty — fetching free proxies...", "info")
-    else:
-        log("No proxies.txt — fetching free proxies from public lists...", "info")
 
-    free_proxies = fetch_free_proxies()
-    if free_proxies:
-        log(f"Fetched {len(free_proxies)} free proxies (may be slow/unreliable)", "info")
-        return free_proxies
-
-    log("No proxies available — running direct connections", "info")
+    log("No proxies configured — running direct connections", "info")
     return []
 
 PROXIES[:] = load_proxies()
@@ -169,8 +161,10 @@ async def fetch_website_data(ctx, url):
         for path in CONTACT_PATHS:
             try:
                 target = url if not path else base_domain + path
-                await page.goto(target, wait_until="domcontentloaded", timeout=10000)
+                await page.goto(target, wait_until="load", timeout=15000)
                 await rand_sleep(0.5, 1.0)
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await rand_sleep(0.3, 0.6)
                 text = await page.inner_text("body")
                 for p in extract_phones(text):
                     if p not in phones:
@@ -278,25 +272,16 @@ async def scrape_city(browser, city, state, niche="businesses", max_count=999, m
                     seen_phones.add(phone_key)
                 seen_name_city.add(name_city_key)
 
-                website = ""
-                card_link = cards.nth(i).locator('a[href*="http"]')
-                if await card_link.count() > 0:
-                    href = await card_link.first.get_attribute("href")
-                    website = clean_website_url(href)
-                if not website:
-                    card_link2 = cards.nth(i).locator('a[href*="/url?"]')
-                    if await card_link2.count() > 0:
-                        href = await card_link2.first.get_attribute("href")
-                        website = clean_website_url(href)
-
                 await cards.nth(i).click()
                 await rand_sleep(0.6, 1.5)
 
                 emails = []
+                website = ""
                 try:
                     await page.keyboard.press("Escape")
                     await rand_sleep(0.2, 0.5)
                     body_text = await page.inner_text("body")
+
                     for e in extract_emails(body_text):
                         if e not in emails:
                             emails.append(e)
@@ -306,25 +291,63 @@ async def scrape_city(browser, city, state, niche="businesses", max_count=999, m
                             e = href.replace("mailto:", "").split("?")[0].strip()
                             if e and "@" in e and e not in emails:
                                 emails.append(e)
+
+                    for sel in ['a[data-item-id*="authority"]', 'a[href^="http"][rel="noopener"]', 'a[href*="http"]:not([href*="google"])']:
+                        ws_el = page.locator(sel)
+                        if await ws_el.count() > 0:
+                            href = await ws_el.first.get_attribute("href")
+                            website = clean_website_url(href)
+                            if website:
+                                break
+
+                    detail_phones = extract_phones(body_text)
+                    for p in detail_phones:
+                        digits = re.sub(r'[^\d]', '', p)
+                        if len(digits) >= 10:
+                            k = digits[-10:]
+                            if k not in seen_10:
+                                seen_10.add(k)
+                                phones.append(p)
                 except:
                     pass
+
+                if not website:
+                    try:
+                        card_link = cards.nth(i).locator('a[href*="http"]')
+                        if await card_link.count() > 0:
+                            href = await card_link.first.get_attribute("href")
+                            website = clean_website_url(href)
+                    except:
+                        pass
+
+                if website and website.startswith("http"):
+                    try:
+                        sp, se = await fetch_website_data(ctx, website)
+                        for e in se:
+                            if e.lower() not in [x.lower() for x in emails]:
+                                emails.append(e)
+                        for p in sp:
+                            if p not in phones:
+                                phones.append(p)
+                    except:
+                        pass
 
                 phones_fmt = [format_phone(p) for p in phones[:4]]
                 entry = {
                     "city": city,
                     "company": name,
-                    "phone1": phones_fmt[0] if len(phones_fmt) > 0 else "",
-                    "phone2": phones_fmt[1] if len(phones_fmt) > 1 else "",
                     "email1": emails[0] if len(emails) > 0 else "",
                     "email2": emails[1] if len(emails) > 1 else "",
                     "email3": emails[2] if len(emails) > 2 else "",
                     "email4": emails[3] if len(emails) > 3 else "",
                     "email5": emails[4] if len(emails) > 4 else "",
+                    "phone1": phones_fmt[0] if len(phones_fmt) > 0 else "",
+                    "phone2": phones_fmt[1] if len(phones_fmt) > 1 else "",
                     "website": website
                 }
                 results.append(entry)
                 print(json.dumps({"type": "business", "entry": entry}), file=sys.stderr, flush=True)
-                log(f"  [{i+1}/{limit}] {name} - p:{entry['phone1'] or 'no'} e:{entry['email1'] or 'no'}", "success")
+                log(f"  [{i+1}/{limit}] {name} - e:{entry['email1'] or 'no'} p:{entry['phone1'] or 'no'}", "success")
                 await rand_sleep(0.2, 0.6)
 
             except Exception as e:
@@ -336,75 +359,6 @@ async def scrape_city(browser, city, state, niche="businesses", max_count=999, m
         await ctx.close()
 
     return results
-
-
-async def enrich_from_websites(browser, results):
-    unique_urls = {}
-    for i, r in enumerate(results):
-        w = r.get("website", "").strip()
-        if w and w.startswith("http"):
-            domain = urllib.parse.urlparse(w).netloc
-            if domain not in unique_urls:
-                unique_urls[domain] = []
-            unique_urls[domain].append(i)
-
-    if not unique_urls:
-        return
-
-    ctx = await browser.new_context(**get_context_kwargs())
-
-    domains = list(unique_urls.keys())
-    sem = asyncio.Semaphore(3)
-    enriched = 0
-
-    async def process_domain(domain):
-        nonlocal enriched
-        idx = unique_urls[domain][0]
-        url = results[idx]["website"]
-        async with sem:
-            site_phones, site_emails = await fetch_website_data(ctx, url)
-
-        if site_phones or site_emails:
-            for i in unique_urls[domain]:
-                er = results[i]
-                existing_phones = set()
-                if er.get("phone1"):
-                    existing_phones.add(re.sub(r'[^\d]', '', er["phone1"])[-10:])
-                if er.get("phone2"):
-                    existing_phones.add(re.sub(r'[^\d]', '', er["phone2"])[-10:])
-
-                if site_phones:
-                    for sp in site_phones:
-                        key = re.sub(r'[^\d]', '', sp)[-10:]
-                        if key not in existing_phones:
-                            if not er.get("phone1"):
-                                er["phone1"] = format_phone(sp)
-                                existing_phones.add(key)
-                            elif not er.get("phone2"):
-                                er["phone2"] = format_phone(sp)
-                                existing_phones.add(key)
-
-                existing_emails = set()
-                for ek in ["email1","email2","email3","email4","email5"]:
-                    if er.get(ek):
-                        existing_emails.add(er[ek].lower())
-
-                if site_emails:
-                    for se in site_emails:
-                        if se.lower() not in existing_emails:
-                            for ek in ["email1","email2","email3","email4","email5"]:
-                                if not er.get(ek):
-                                    er[ek] = se
-                                    existing_emails.add(se.lower())
-                                    break
-            enriched += 1
-            for i in unique_urls[domain]:
-                print(json.dumps({"type": "business_update", "index": i, "entry": results[i]}), file=sys.stderr, flush=True)
-            log(f"  {domain}: {len(site_emails)} emails, {len(site_phones)} phones", "success")
-
-    await asyncio.gather(*[process_domain(d) for d in domains])
-    await ctx.close()
-    log(f"Website enrichment: {enriched}/{len(domains)} sites yielded data", "info")
 
 
 async def main():
@@ -467,10 +421,6 @@ async def main():
                 if total_count >= args.max_total:
                     log(f"Reached max total of {args.max_total} businesses, stopping.", "info")
                     break
-
-        if all_results:
-            log(f"Enriching from websites ({len(all_results)} businesses)...", "info")
-            await enrich_from_websites(browser, all_results)
 
         await browser.close()
 

@@ -1,15 +1,236 @@
+require('dotenv').config();
 const express = require('express');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const XLSX = require('xlsx');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const mongoose = require('mongoose');
+const bcrypt = require('bcrypt');
+const User = require('./models/User');
 
 const app = express();
-app.use(express.json());
-app.use(express.static('public'));
+
+// --- Security middleware ---
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false
+}));
+app.disable('x-powered-by');
+
+// --- Rate limiting ---
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many login attempts. Try again in 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  message: { error: 'Too many requests. Slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+app.use('/api/', apiLimiter);
+app.use(express.json({ limit: '1mb' }));
+app.use(express.static('public', { maxAge: 0 }));
 
 const PORT = process.env.PORT || 3000;
+
+// --- MongoDB ---
+mongoose.connect(process.env.MONGODB_URI, {
+  serverSelectionTimeoutMS: 15000,
+  tlsAllowInvalidCertificates: true,
+})
+  .then(() => console.log('MongoDB connected'))
+  .catch(err => { console.error('MongoDB connection error:', err.message); process.exit(1); });
+
+// --- Auth ---
+const TOKEN_EXPIRY_MS = 24 * 60 * 60 * 1000;
+const tokens = {};
+
+function generateToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function sanitize(str) {
+  return typeof str === 'string' ? str.replace(/[<>]/g, '').trim() : '';
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, session] of Object.entries(tokens)) {
+    if (now > session.expiresAt) delete tokens[token];
+  }
+}, 60 * 60 * 1000);
+
+app.post('/api/login', loginLimiter, async (req, res) => {
+  const username = sanitize(req.body.username);
+  const password = req.body.password || '';
+  if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+  try {
+    const user = await User.findOne({ username });
+    if (!user) return res.status(401).json({ error: 'Invalid username or password' });
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(401).json({ error: 'Invalid username or password' });
+    if (user.username === 'admin' && user.role !== 'admin') {
+      user.role = 'admin';
+      await user.save();
+    }
+    if (user.onHold && user.role !== 'admin') {
+      return res.json({ onHold: true, role: user.role });
+    }
+    const role = user.role || (user.username === 'admin' ? 'admin' : 'user');
+    const token = generateToken();
+    tokens[token] = { userId: user._id.toString(), username: user.username, role, expiresAt: Date.now() + TOKEN_EXPIRY_MS };
+    res.json({ token, role });
+  } catch { res.status(500).json({ error: 'Server error' }); }
+});
+
+function getSession(req) {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ')) return null;
+  const session = tokens[auth.slice(7)];
+  if (!session || Date.now() > session.expiresAt) {
+    if (session) delete tokens[auth.slice(7)];
+    return null;
+  }
+  return session;
+}
+
+app.get('/api/me', async (req, res) => {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Invalid token' });
+  const user = await User.findById(session.userId);
+  const onHold = user ? user.onHold : false;
+  res.json({ username: session.username, role: session.role, onHold });
+});
+
+function requireAuth(req, res, next) {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Unauthorized' });
+  req.userId = session.userId;
+  req.username = session.username;
+  next();
+}
+
+function requireAdmin(req, res, next) {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Unauthorized' });
+  if (session.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+  req.userId = session.userId;
+  req.username = session.username;
+  req.role = session.role;
+  next();
+}
+
+// --- Admin endpoints ---
+app.get('/api/admin/stats', requireAdmin, async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const adminUsers = await User.countDocuments({ role: 'admin' });
+    const regularUsers = await User.countDocuments({ role: 'user' });
+    const today = new Date().toISOString().split('T')[0];
+    const activeToday = await User.countDocuments({ lastScrapeDate: today });
+    const totalScrapesToday = await User.aggregate([
+      { $match: { lastScrapeDate: today } },
+      { $group: { _id: null, total: { $sum: '$scrapeCount' } } }
+    ]);
+    res.json({
+      totalUsers,
+      adminUsers,
+      regularUsers,
+      activeToday,
+      totalScrapesToday: totalScrapesToday.length > 0 ? totalScrapesToday[0].total : 0
+    });
+  } catch { res.status(500).json({ error: 'Server error' }); }
+});
+
+app.get('/api/admin/users', requireAdmin, async (req, res) => {
+  try {
+    const users = await User.find({}, { password: 0 }).sort({ createdAt: -1 });
+    res.json(users);
+  } catch { res.status(500).json({ error: 'Server error' }); }
+});
+
+app.post('/api/admin/users', requireAdmin, async (req, res) => {
+  const username = sanitize(req.body.username);
+  const password = req.body.password || '';
+  if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+  if (password.length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters' });
+  try {
+    const existing = await User.findOne({ username });
+    if (existing) return res.status(409).json({ error: 'Username already exists' });
+    const hashed = await bcrypt.hash(password, 10);
+    const user = await User.create({ username, password: hashed, role: 'user' });
+    res.json({ _id: user._id, username: user.username, role: user.role, createdAt: user.createdAt });
+  } catch { res.status(500).json({ error: 'Server error' }); }
+});
+
+app.put('/api/admin/users/:id', requireAdmin, async (req, res) => {
+  const username = sanitize(req.body.username);
+  const password = req.body.password || '';
+  if (!username) return res.status(400).json({ error: 'Username required' });
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.role === 'admin' && username !== user.username) return res.status(403).json({ error: 'Cannot rename admin users' });
+    const existing = await User.findOne({ username, _id: { $ne: req.params.id } });
+    if (existing) return res.status(409).json({ error: 'Username already exists' });
+    user.username = username;
+    if (password) {
+      if (password.length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters' });
+      user.password = await bcrypt.hash(password, 10);
+    }
+    await user.save();
+    res.json({ _id: user._id, username: user.username, role: user.role });
+  } catch { res.status(500).json({ error: 'Server error' }); }
+});
+
+app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.role === 'admin') return res.status(403).json({ error: 'Cannot delete admin users' });
+    await User.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch { res.status(500).json({ error: 'Server error' }); }
+});
+
+app.put('/api/admin/users/:id/subscribe', requireAdmin, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    user.subscribed = !user.subscribed;
+    await user.save();
+    res.json({ _id: user._id, username: user.username, subscribed: user.subscribed });
+  } catch { res.status(500).json({ error: 'Server error' }); }
+});
+
+
+
+// --- Scrape limit middleware ---
+async function checkScrapeLimit(req, res, next) {
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(401).json({ error: 'User not found' });
+    if (user.onHold) return res.status(403).json({ error: 'Account on hold — contact admin' });
+    const today = new Date().toISOString().split('T')[0];
+    if (user.lastScrapeDate !== today) {
+      user.scrapeCount = 0;
+      user.lastScrapeDate = today;
+      await user.save();
+    }
+    if (user.scrapeCount >= 2) return res.status(429).json({ error: 'Daily limit reached — 2 scrapes per day only' });
+    next();
+  } catch { res.status(500).json({ error: 'Server error' }); }
+}
 const JOBS_DIR = path.join(__dirname, 'jobs');
 if (!fs.existsSync(JOBS_DIR)) fs.mkdirSync(JOBS_DIR);
 
@@ -156,20 +377,28 @@ function runPythonScraper(state, cities, niche, maxPerCity, jobId, maxTotal = 10
       reject(new Error(`Failed to start Python scraper: ${err.message}`));
     });
 
-    setTimeout(() => {
-      proc.kill();
-      if (jobs[jobId]) jobs[jobId].status = 'error';
-      reject(new Error('Python scraper timed out after 1 hour'));
-    }, 3600000);
+    // no timeout — keep scraping until 1k leads reached
   });
 }
 
-app.post('/api/scrape', async (req, res) => {
-  const { state, cities: selectedCities, niche } = req.body;
+app.put('/api/admin/users/:id/hold', requireAdmin, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.role === 'admin') return res.status(403).json({ error: 'Cannot hold admin users' });
+    user.onHold = !user.onHold;
+    await user.save();
+    res.json({ _id: user._id, username: user.username, onHold: user.onHold });
+  } catch { res.status(500).json({ error: 'Server error' }); }
+});
+
+app.post('/api/scrape', requireAuth, checkScrapeLimit, async (req, res) => {
+  const state = sanitize(req.body.state);
+  const selectedCities = Array.isArray(req.body.cities) ? req.body.cities.map(sanitize).filter(Boolean) : [];
+  const niche = sanitize(req.body.niche) || 'businesses';
   if (!state || !CITIES[state]) {
     return res.status(400).json({ error: 'Invalid state selected' });
   }
-
   const allCities = CITIES[state];
   const targetCities = selectedCities && selectedCities.length > 0
     ? selectedCities
@@ -177,7 +406,10 @@ app.post('/api/scrape', async (req, res) => {
 
   const jobId = genId();
   jobs[jobId] = {
+    userId: req.userId,
+    username: req.username,
     state,
+    niche: (niche && niche.trim()) || 'businesses',
     status: 'running',
     cities: targetCities,
     progress: 0,
@@ -196,13 +428,13 @@ app.post('/api/scrape', async (req, res) => {
   res.json({ jobId, totalCities: targetCities.length });
 
   const activeNiche = (niche && niche.trim()) ? niche.trim() : 'businesses';
-  scrapeRunner(jobId, state, targetCities, activeNiche).catch(err => {
+  scrapeRunner(req.userId, jobId, state, targetCities, activeNiche).catch(err => {
     logEntry(jobId, `Fatal error: ${err.message}`, 'error');
     if (jobs[jobId]) jobs[jobId].status = 'error';
   });
 });
 
-async function scrapeRunner(jobId, state, cities, niche = 'businesses') {
+async function scrapeRunner(userId, jobId, state, cities, niche = 'businesses') {
   try {
     logEntry(jobId, `Launching Python Playwright scraper for '${niche}'...`, 'info');
 
@@ -221,6 +453,7 @@ async function scrapeRunner(jobId, state, cities, niche = 'businesses') {
 
   if (jobs[jobId] && jobs[jobId].status !== 'cancelled') {
     jobs[jobId].status = 'completed';
+    try { await User.findByIdAndUpdate(userId, { $inc: { scrapeCount: 1 } }); } catch {} // increment daily scrape count
 
     const filename = `businesses_${state.replace(/\s+/g, '_')}_${jobId}.xlsx`;
     const filepath = path.join(JOBS_DIR, filename);
@@ -232,12 +465,13 @@ async function scrapeRunner(jobId, state, cities, niche = 'businesses') {
         : [{ city: '', company: '', phone1: '', phone2: '', email1: '', email2: '', email3: '', email4: '', email5: '', website: '' }];
       const worksheet = XLSX.utils.json_to_sheet(data);
 
-      const headers = ['City', 'Company Name', 'Phone 1', 'Phone 2', 'Email 1', 'Email 2', 'Email 3', 'Email 4', 'Email 5', 'Website'];
+      const headers = ['City', 'Company Name', 'Email 1', 'Email 2', 'Email 3', 'Email 4', 'Email 5', 'Phone 1', 'Phone 2', 'Website'];
       XLSX.utils.sheet_add_aoa(worksheet, [headers], { origin: 'A1' });
 
       const colWidths = [
-        { wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 18 },
+        { wch: 20 }, { wch: 35 },
         { wch: 35 }, { wch: 35 }, { wch: 35 }, { wch: 35 }, { wch: 35 },
+        { wch: 18 }, { wch: 18 },
         { wch: 40 }
       ];
       worksheet['!cols'] = colWidths;
@@ -276,6 +510,7 @@ app.get('/api/progress/:jobId', (req, res) => {
     totalCities: job.totalCities,
     completedCities: job.completedCities,
     totalBusinesses: job.status === 'running' ? (job.totalBusinesses || 0) : job.data.length,
+    data: job.data.slice(-50),
     logs: job.logs.slice(-100),
     filename: job.filename || null,
     elapsedSecs: elapsed,
@@ -304,13 +539,14 @@ function generateExcelForJob(jobId, job) {
     const workbook = XLSX.utils.book_new();
     const data = job.data.length > 0
       ? job.data
-      : [{ city: '', company: '', phone1: '', phone2: '', email1: '', email2: '', email3: '', email4: '', email5: '', website: '' }];
+      : [{ city: '', company: '', email1: '', email2: '', email3: '', email4: '', email5: '', phone1: '', phone2: '', website: '' }];
     const worksheet = XLSX.utils.json_to_sheet(data);
-    const headers = ['City', 'Company Name', 'Phone 1', 'Phone 2', 'Email 1', 'Email 2', 'Email 3', 'Email 4', 'Email 5', 'Website'];
+    const headers = ['City', 'Company Name', 'Email 1', 'Email 2', 'Email 3', 'Email 4', 'Email 5', 'Phone 1', 'Phone 2', 'Website'];
     XLSX.utils.sheet_add_aoa(worksheet, [headers], { origin: 'A1' });
     worksheet['!cols'] = [
-      { wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 18 },
+      { wch: 20 }, { wch: 35 },
       { wch: 35 }, { wch: 35 }, { wch: 35 }, { wch: 35 }, { wch: 35 },
+      { wch: 18 }, { wch: 18 },
       { wch: 40 }
     ];
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Businesses');

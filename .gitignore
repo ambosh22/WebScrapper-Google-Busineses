@@ -2,3 +2,4 @@ node_modules/
 jobs/
 *.xlsx
 .env
+.DS_Store
