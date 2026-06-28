@@ -15,12 +15,7 @@ const VIEWPORTS = [
   { width: 1440, height: 900 },
 ];
 
-const CONTACT_KEYWORDS = /contact|about|team|staff|support|location|find|help|info/i;
-const SKIP_KEYWORDS = /facebook|twitter|linkedin|instagram|youtube|wp-content|wp-includes|wp-json|cdn-cgi|\.pdf|\.doc|\.docx|\.xls|\.zip|\.png|\.jpg|\.jpeg|\.gif|\.svg|\.css|\.js/i;
-
 const NAV_TIMEOUT = 30000;
-const PAGE_TIMEOUT = 8000;
-const MAX_RETRIES = 1;
 
 function randSleep(min = 0.2, max = 0.5) {
   return new Promise(r => setTimeout(r, (Math.random() * (max - min) + min) * 1000));
@@ -100,122 +95,63 @@ function createContext(browser) {
   });
 }
 
-async function withRetry(name, fn, retries = MAX_RETRIES) {
-  for (let i = 0; i <= retries; i++) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (i === retries) throw err;
-      console.error(`[RETRY] ${name} attempt ${i + 1} failed: ${err.message}`);
-      await randSleep(0.5, 1.0);
-    }
-  }
-}
-
-async function extractPageData(page) {
-  const phones = [];
-  const emails = new Set();
-  try {
-    const text = await page.evaluate(() => document.body.innerText || document.documentElement.outerText || '');
-    for (const ph of extractPhones(text)) if (!phones.includes(ph)) phones.push(ph);
-    for (const em of extractEmails(text)) emails.add(em);
-    const mailtoEls = await page.locator('a[href^="mailto:"]').all();
-    for (const el of mailtoEls) {
-      const href = await el.getAttribute('href');
-      if (href) {
-        const e = href.replace('mailto:', '').split('?')[0].trim();
-        if (e && e.includes('@') && !emails.has(e.toLowerCase())) emails.add(e);
-      }
-    }
-    const telEls = await page.locator('a[href^="tel:"]').all();
-    for (const el of telEls) {
-      const href = await el.getAttribute('href');
-      if (href) {
-        const num = href.replace('tel:', '').split(/[;,#]/)[0].trim().replace(/[^\d+]/g, '');
-        if (num.length >= 10 && !phones.includes(num)) phones.push(num);
-      }
-    }
-    try {
-      const html = await page.evaluate(() => document.documentElement.outerHTML);
-      for (const em of extractEmails(html)) emails.add(em);
-    } catch {}
-  } catch {}
-  return { phones, emails };
-}
-
-function discoverLinks(page, domain) {
-  return page.evaluate((d) => {
-    const result = [];
-    const seen = new Set();
-    const skip = /facebook|twitter|linkedin|instagram|youtube|wp-content|wp-includes|wp-json|cdn-cgi|\.pdf|\.doc|\.docx|\.xls|\.zip|\.png|\.jpg|\.jpeg|\.gif|\.svg|\.css|\.js/i;
-    for (const a of document.querySelectorAll('a[href]')) {
-      try {
-        const href = a.href.split('#')[0].split('?')[0].replace(/\/$/, '');
-        const u = new URL(href);
-        if (u.hostname.replace(/^www\./, '') === d && !seen.has(href) && !skip.test(href)) {
-          seen.add(href);
-          result.push(href);
-        }
-      } catch {}
-    }
-    return result;
-  }, domain.replace(/^www\./, ''));
-}
-
-const CONTACT_PATHS = ['', '/contact', '/about', '/contact-us', '/about-us', '/get-in-touch', '/support', '/location'];
-
 async function fetchWebsiteData(ctx, url) {
-  const timeout = 30000;
+  const timeout = 25000;
   const timer = new Promise((_, reject) => setTimeout(() => reject(new Error(`Website crawl timed out: ${url}`)), timeout));
   const work = (async () => {
   const wp = await ctx.newPage();
   const phones = [];
   const emails = new Set();
-  const visited = new Set();
+  const tried = new Set();
   try {
     const parsed = new URL(url);
     const base = `${parsed.protocol}//${parsed.host}`;
-    const domain = parsed.hostname.replace(/^www\./, '');
-    const queue = CONTACT_PATHS.map(p => p ? base + p : url);
+    const pages = [url, base + '/contact'];
 
-    while (queue.length > 0 && emails.size < 3 && visited.size < 8) {
-      const target = queue.shift();
-      if (visited.has(target)) continue;
-      visited.add(target);
+    for (const target of pages) {
+      if (emails.size >= 3 || tried.has(target)) continue;
+      tried.add(target);
       try {
-        await withRetry(`goto ${target}`, () =>
-          wp.goto(target, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT })
+        await wp.goto(target, { waitUntil: 'networkidle', timeout: 12000 }).catch(() =>
+          wp.goto(target, { waitUntil: 'domcontentloaded', timeout: 8000 })
         );
-        await randSleep(0.2, 0.4);
-        try { await wp.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); } catch {}
+        await wp.waitForTimeout(500);
+        await wp.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+        await wp.waitForTimeout(300);
 
-        const { phones: newPhones, emails: newEmails } = await extractPageData(wp);
-        for (const ph of newPhones) if (!phones.includes(ph)) phones.push(ph);
-        for (const em of newEmails) emails.add(em);
-        if (emails.size >= 3) break;
+        const text = await wp.evaluate(() => document.body.innerText || document.documentElement.outerText || '');
+        const html = await wp.evaluate(() => document.documentElement.outerHTML);
 
-        if (visited.size < 6) {
-          try {
-            const links = await discoverLinks(wp, domain);
-            const prioritized = links.filter(l => CONTACT_KEYWORDS.test(l));
-            for (const link of prioritized) {
-              if (!visited.has(link) && !queue.includes(link)) queue.push(link);
-            }
-            for (const link of links) {
-              if (!visited.has(link) && !queue.includes(link)) queue.push(link);
-            }
-          } catch {}
+        for (const ph of extractPhones(text)) if (!phones.includes(ph)) phones.push(ph);
+
+        const pageEmails = new Set();
+        for (const em of extractEmails(text)) pageEmails.add(em);
+        for (const em of extractEmails(html)) pageEmails.add(em);
+
+        const mailtoEls = await wp.locator('a[href^="mailto:"]').all();
+        for (const el of mailtoEls) {
+          const href = await el.getAttribute('href');
+          if (href) {
+            const e = href.replace('mailto:', '').split('?')[0].trim();
+            if (e && e.includes('@')) pageEmails.add(e);
+          }
         }
-      } catch {}
-    }
 
-    if (emails.size < 3 && !visited.has(url)) {
-      try {
-        await wp.goto(url, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT });
-        await randSleep(0.3, 0.6);
-        const { phones: hp, emails: he } = await extractPageData(wp);
-        for (const ph of hp) if (!phones.includes(ph)) phones.push(ph);
-        for (const em of he) emails.add(em);
+        for (const el of await wp.locator('[class*="email"], [id*="email"], [class*="mail"], [id*="mail"]').all()) {
+          const t = await el.innerText();
+          for (const em of extractEmails(t)) pageEmails.add(em);
+        }
+
+        const telEls = await wp.locator('a[href^="tel:"]').all();
+        for (const el of telEls) {
+          const href = await el.getAttribute('href');
+          if (href) {
+            const num = href.replace('tel:', '').split(/[;,#]/)[0].trim().replace(/[^\d+]/g, '');
+            if (num.length >= 10 && !phones.includes(num)) phones.push(num);
+          }
+        }
+
+        for (const em of pageEmails) emails.add(em);
       } catch {}
     }
   } catch {}
