@@ -602,13 +602,8 @@ function updateLiveTable(entries) {
     return `<tr>
       <td>${esc(e.city || '')}</td>
       <td>${esc(e.company || '')}</td>
-      <td>${esc(e.email1 || '')}</td>
-      <td>${esc(e.email2 || '')}</td>
-      <td>${esc(e.email3 || '')}</td>
-      <td>${esc(e.email4 || '')}</td>
-      <td>${esc(e.email5 || '')}</td>
-      <td>${esc(e.phone1 || '')}</td>
-      <td>${esc(e.phone2 || '')}</td>
+      <td>${esc(e.phone || '')}</td>
+      <td>${esc(e.email || '')}</td>
       <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(e.website || '')}</td>
     </tr>`;
   }).join('');

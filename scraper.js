@@ -75,23 +75,26 @@ function cleanWebsiteUrl(href) {
   return href.split('?')[0].replace(/\/$/, '');
 }
 
+const CONTACT_PATHS = ['/contact', '/about', '/contact-us', '/about-us', '/get-in-touch'];
+
 async function fetchWebsiteData(ctx, url) {
   const wp = await ctx.newPage();
   const phones = [];
   const emails = new Set();
   const visited = new Set();
-  const queue = [url];
   try {
     const parsed = new URL(url);
-    const maxPages = 8;
+    const base = `${parsed.protocol}//${parsed.host}`;
+    const domain = parsed.hostname.replace(/^www\./, '');
+    const queue = CONTACT_PATHS.map(p => base + p);
 
-    while (queue.length > 0 && emails.size < 3 && visited.size < maxPages) {
+    while (queue.length > 0 && emails.size < 2 && visited.size < 8) {
       const target = queue.shift();
       if (visited.has(target)) continue;
       visited.add(target);
       try {
         await wp.goto(target, { waitUntil: 'domcontentloaded', timeout: 8000 });
-        await randSleep(0.2, 0.5);
+        await randSleep(0.3, 0.6);
         try { await wp.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); await randSleep(0.2, 0.3); } catch {}
         const text = await wp.evaluate(() => document.body.innerText || document.documentElement.outerText || '');
         for (const ph of extractPhones(text)) if (!phones.includes(ph)) phones.push(ph);
@@ -109,23 +112,21 @@ async function fetchWebsiteData(ctx, url) {
           for (const em of extractEmails(html)) emails.add(em);
         } catch {}
 
-        if (emails.size < 3 && visited.size < maxPages) {
+        if (emails.size < 2) {
           try {
-            const links = await wp.evaluate((domain) => {
-              const result = [];
-              const anchors = document.querySelectorAll('a[href]');
-              for (const a of anchors) {
+            const links = await wp.evaluate((d) => {
+              const r = [];
+              for (const a of document.querySelectorAll('a[href]')) {
                 try {
-                  const href = a.href.split('#')[0].split('?')[0].replace(/\/$/, '');
-                  const u = new URL(href);
-                  if (u.hostname === domain && !result.includes(href) && !href.match(/\.(pdf|doc|docx|xls|xlsx|zip|tar|gz|png|jpg|jpeg|gif|svg|css|js|json|xml|mp4|mp3)$/i)) {
-                    const skip = ['/wp-content', '/wp-includes', '/wp-json', '/cdn-cgi', 'facebook.com', 'twitter.com', 'linkedin.com', 'instagram.com', 'youtube.com'];
-                    if (!skip.some(s => href.includes(s))) result.push(href);
+                  const h = a.href.split('#')[0].split('?')[0].replace(/\/$/, '');
+                  const u = new URL(h);
+                  if (u.hostname.replace(/^www\./, '') === d && h.match(/contact|about|team|staff|support|location|find/i) && !r.includes(h)) {
+                    r.push(h);
                   }
                 } catch {}
               }
-              return result;
-            }, parsed.hostname);
+              return r;
+            }, domain);
             for (const link of links) {
               if (!visited.has(link) && !queue.includes(link)) queue.push(link);
             }
