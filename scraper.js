@@ -2,6 +2,22 @@ const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const http = require('http');
+const https = require('https');
+const { URL } = require('url');
+
+function fetchUrl(url, timeout = 8000) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith('https') ? https : http;
+    const req = client.get(url, { timeout, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' } }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve(data));
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+  });
+}
 
 const USER_AGENTS = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -96,60 +112,56 @@ function createContext(browser) {
 }
 
 async function fetchWebsiteData(ctx, url) {
-  const timeout = 30000;
-  const timer = new Promise((_, reject) => setTimeout(() => reject(new Error(`Website crawl timed out: ${url}`)), timeout));
-  const work = (async () => {
-  const wp = await ctx.newPage();
   const phones = [];
   const emails = new Set();
   try {
-    const base = (() => { const p = new URL(url); return `${p.protocol}//${p.host}`; })();
-    const pages = [url, base + '/contact', base + '/about'];
+    const parsed = new URL(url);
+    const base = `${parsed.protocol}//${parsed.host}`;
+    const paths = ['', '/contact', '/about', '/contact-us', '/about-us'];
 
-    for (const target of pages) {
+    for (const p of paths) {
       if (emails.size >= 3) break;
+      const target = p ? base + p : url;
       try {
-        await wp.goto(target, { waitUntil: 'load', timeout: 15000 }).catch(() =>
-          wp.goto(target, { waitUntil: 'domcontentloaded', timeout: 10000 })
-        );
-        await new Promise(r => setTimeout(r, 500 + Math.random() * 500));
-        await wp.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
-        await new Promise(r => setTimeout(r, 300 + Math.random() * 300));
-
-        const text = await wp.evaluate(() => document.body.innerText || '');
-        const html = await wp.evaluate(() => document.documentElement.outerHTML || '');
-
-        for (const ph of extractPhones(text)) if (!phones.includes(ph)) phones.push(ph);
-
-        const found = new Set();
-        for (const em of extractEmails(text)) found.add(em);
-        for (const em of extractEmails(html)) found.add(em);
-
-        const mails = await wp.locator('a[href^="mailto:"]').all();
-        for (const el of mails) {
-          const h = await el.getAttribute('href');
-          if (h) { const e = h.replace('mailto:', '').split('?')[0].trim(); if (e && e.includes('@')) found.add(e); }
+        const html = await fetchUrl(target);
+        const clean = html.replace(/<script[\s\S]*?<\/script>/gi, '')
+                          .replace(/<style[\s\S]*?<\/style>/gi, '')
+                          .replace(/<[^>]+>/g, ' ');
+        for (const em of extractEmails(html)) emails.add(em);
+        for (const em of extractEmails(clean)) emails.add(em);
+        const mailMatch = html.match(/href=["']mailto:([^"']+)["']/gi);
+        if (mailMatch) {
+          for (const m of mailMatch) {
+            const e = m.replace(/href=["']mailto:/i, '').replace(/["']/, '').split('?')[0].trim();
+            if (e && e.includes('@') && e.length < 100) emails.add(e);
+          }
         }
+      } catch {}
+    }
 
-        for (const el of await wp.locator('[class*="email"],[id*="email"],[class*="mail"],[id*="mail"]').all()) {
-          const t = await el.innerText().catch(() => '');
-          for (const em of extractEmails(t)) found.add(em);
-        }
-
-        const tels = await wp.locator('a[href^="tel:"]').all();
-        for (const el of tels) {
-          const h = await el.getAttribute('href');
-          if (h) { const n = h.replace('tel:', '').split(/[;,#]/)[0].trim().replace(/[^\d+]/g, ''); if (n.length >= 10 && !phones.includes(n)) phones.push(n); }
-        }
-
-        for (const em of found) emails.add(em);
+    if (emails.size < 1) {
+      try {
+        const wp = await ctx.newPage();
+        try {
+          await wp.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+          await new Promise(r => setTimeout(r, 1000));
+          await wp.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+          await new Promise(r => setTimeout(r, 500));
+          const text = await wp.evaluate(() => document.body.innerText || '');
+          const html = await wp.evaluate(() => document.documentElement.outerHTML || '');
+          for (const em of extractEmails(text)) emails.add(em);
+          for (const em of extractEmails(html)) emails.add(em);
+          const mails = await wp.locator('a[href^="mailto:"]').all();
+          for (const el of mails) {
+            const h = await el.getAttribute('href');
+            if (h) { const e = h.replace('mailto:', '').split('?')[0].trim(); if (e && e.includes('@')) emails.add(e); }
+          }
+        } catch {}
+        await wp.close();
       } catch {}
     }
   } catch {}
-  await wp.close();
   return { phones: phones.slice(0, 3), emails: [...emails].slice(0, 5) };
-  })();
-  return Promise.race([work, timer]);
 }
 
 async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, currentTotal, seenPhones, seenNameCity, onProgress) {
