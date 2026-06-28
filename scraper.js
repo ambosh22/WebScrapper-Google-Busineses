@@ -77,7 +77,8 @@ function cleanWebsiteUrl(href) {
 
 const CONTACT_PATHS = ['/contact', '/about'];
 
-async function fetchWebsiteData(page, url) {
+async function fetchWebsiteData(ctx, url) {
+  const wp = await ctx.newPage();
   const phones = [];
   const emails = new Set();
   try {
@@ -85,12 +86,12 @@ async function fetchWebsiteData(page, url) {
     const baseDomain = `${parsed.protocol}//${parsed.host}`;
     for (const p of CONTACT_PATHS) {
       try {
-        await page.goto(baseDomain + p, { waitUntil: 'domcontentloaded', timeout: 8000 });
+        await wp.goto(baseDomain + p, { waitUntil: 'domcontentloaded', timeout: 8000 });
         await randSleep(0.3, 0.6);
-        const text = await page.evaluate(() => document.body.innerText);
+        const text = await wp.evaluate(() => document.body.innerText);
         for (const ph of extractPhones(text)) if (!phones.includes(ph)) phones.push(ph);
         for (const em of extractEmails(text)) emails.add(em);
-        const mailtoEls = await page.locator('a[href^="mailto:"]').all();
+        const mailtoEls = await wp.locator('a[href^="mailto:"]').all();
         for (const el of mailtoEls) {
           const href = await el.getAttribute('href');
           if (href) {
@@ -102,6 +103,7 @@ async function fetchWebsiteData(page, url) {
       } catch {}
     }
   } catch {}
+  await wp.close();
   return { phones: phones.slice(0, 2), emails: [...emails].slice(0, 3) };
 }
 
@@ -186,11 +188,9 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
           }
 
           for (const sel of [
-            'a[aria-label*="Website" i]',
-            'a[aria-label*="website" i]',
             'a[data-item-id*="authority"]',
             'a[href^="http"][rel="noopener"]',
-            'a[role="link"][href^="http"]',
+            'a[href*="http"]:not([href*="google"]):not([href*="maps"])',
           ]) {
             const wsEl = page.locator(sel);
             if (await wsEl.count() > 0) {
@@ -201,12 +201,14 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
           }
 
           if (!website) {
-            const allLinks = await page.evaluate(() =>
-              Array.from(document.querySelectorAll('a[href]'))
-                .map(a => a.href)
-                .filter(h => h.startsWith('http') && !h.includes('google'))
-            );
-            if (allLinks.length > 0) website = allLinks[0];
+            website = await page.evaluate(() => {
+              const els = document.querySelectorAll('a[href]:not([href*="google"]):not([href*="maps"])');
+              for (const el of els) {
+                const h = el.href;
+                if (h && h.startsWith('http') && !h.includes('google') && !h.includes('maps')) return h;
+              }
+              return '';
+            });
           }
 
           const detailPhones = extractPhones(bodyText);
@@ -229,22 +231,9 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
           } catch {}
         }
 
-        if (!website) {
-          try {
-            website = await page.evaluate(() => {
-              const els = document.querySelectorAll('a[href]:not([href*="google"]):not([href*="maps"])');
-              for (const el of els) {
-                const h = el.href;
-                if (h && h.startsWith('http') && !h.includes('google') && !h.includes('maps')) return h;
-              }
-              return '';
-            });
-          } catch {}
-        }
-
         if (website && website.startsWith('http')) {
           try {
-            const { phones: sp, emails: se } = await fetchWebsiteData(page, website);
+            const { phones: sp, emails: se } = await fetchWebsiteData(ctx, website);
             for (const e of se) if (!emails.find(x => x.toLowerCase() === e.toLowerCase())) emails.push(e);
             for (const p of sp) if (!phones.includes(p)) phones.push(p);
           } catch {}
