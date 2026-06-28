@@ -26,6 +26,7 @@ if (!fs.existsSync(PW_CHROMIUM_DIR)) {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 
 // --- Security middleware ---
 app.use(helmet({
@@ -620,7 +621,7 @@ if (require.main === module) {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`Network access: http://0.0.0.0:${PORT}`);
-    console.log(`Python scraper: ${path.join(__dirname, 'scraper.py')}`);
+    console.log(`Scraper: ${path.join(__dirname, 'scraper.js')} (Node.js Playwright)`);
   });
 }
 
