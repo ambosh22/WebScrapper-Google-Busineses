@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: google-maps-scraper
+    runtime: node
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_VERSION
+        value: 20
