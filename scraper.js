@@ -162,7 +162,7 @@ function discoverLinks(page, domain) {
   }, domain.replace(/^www\./, ''));
 }
 
-const CONTACT_PATHS = ['/contact', '/about', '/contact-us', '/about-us', '/get-in-touch', '/support', '/location'];
+const CONTACT_PATHS = ['', '/contact', '/about', '/contact-us', '/about-us', '/get-in-touch', '/support', '/location'];
 
 async function fetchWebsiteData(ctx, url) {
   const timeout = 30000;
@@ -176,7 +176,7 @@ async function fetchWebsiteData(ctx, url) {
     const parsed = new URL(url);
     const base = `${parsed.protocol}//${parsed.host}`;
     const domain = parsed.hostname.replace(/^www\./, '');
-    const queue = CONTACT_PATHS.map(p => base + p);
+    const queue = CONTACT_PATHS.map(p => p ? base + p : url);
 
     while (queue.length > 0 && emails.size < 3 && visited.size < 8) {
       const target = queue.shift();
