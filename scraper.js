@@ -96,62 +96,53 @@ function createContext(browser) {
 }
 
 async function fetchWebsiteData(ctx, url) {
-  const timeout = 25000;
+  const timeout = 30000;
   const timer = new Promise((_, reject) => setTimeout(() => reject(new Error(`Website crawl timed out: ${url}`)), timeout));
   const work = (async () => {
   const wp = await ctx.newPage();
   const phones = [];
   const emails = new Set();
-  const tried = new Set();
   try {
-    const parsed = new URL(url);
-    const base = `${parsed.protocol}//${parsed.host}`;
-    const pages = [url, base + '/contact'];
+    const base = (() => { const p = new URL(url); return `${p.protocol}//${p.host}`; })();
+    const pages = [url, base + '/contact', base + '/about'];
 
     for (const target of pages) {
-      if (emails.size >= 3 || tried.has(target)) continue;
-      tried.add(target);
+      if (emails.size >= 3) break;
       try {
-        await wp.goto(target, { waitUntil: 'networkidle', timeout: 12000 }).catch(() =>
-          wp.goto(target, { waitUntil: 'domcontentloaded', timeout: 8000 })
+        await wp.goto(target, { waitUntil: 'load', timeout: 15000 }).catch(() =>
+          wp.goto(target, { waitUntil: 'domcontentloaded', timeout: 10000 })
         );
-        await wp.waitForTimeout(500);
+        await new Promise(r => setTimeout(r, 500 + Math.random() * 500));
         await wp.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
-        await wp.waitForTimeout(300);
+        await new Promise(r => setTimeout(r, 300 + Math.random() * 300));
 
-        const text = await wp.evaluate(() => document.body.innerText || document.documentElement.outerText || '');
-        const html = await wp.evaluate(() => document.documentElement.outerHTML);
+        const text = await wp.evaluate(() => document.body.innerText || '');
+        const html = await wp.evaluate(() => document.documentElement.outerHTML || '');
 
         for (const ph of extractPhones(text)) if (!phones.includes(ph)) phones.push(ph);
 
-        const pageEmails = new Set();
-        for (const em of extractEmails(text)) pageEmails.add(em);
-        for (const em of extractEmails(html)) pageEmails.add(em);
+        const found = new Set();
+        for (const em of extractEmails(text)) found.add(em);
+        for (const em of extractEmails(html)) found.add(em);
 
-        const mailtoEls = await wp.locator('a[href^="mailto:"]').all();
-        for (const el of mailtoEls) {
-          const href = await el.getAttribute('href');
-          if (href) {
-            const e = href.replace('mailto:', '').split('?')[0].trim();
-            if (e && e.includes('@')) pageEmails.add(e);
-          }
+        const mails = await wp.locator('a[href^="mailto:"]').all();
+        for (const el of mails) {
+          const h = await el.getAttribute('href');
+          if (h) { const e = h.replace('mailto:', '').split('?')[0].trim(); if (e && e.includes('@')) found.add(e); }
         }
 
-        for (const el of await wp.locator('[class*="email"], [id*="email"], [class*="mail"], [id*="mail"]').all()) {
-          const t = await el.innerText();
-          for (const em of extractEmails(t)) pageEmails.add(em);
+        for (const el of await wp.locator('[class*="email"],[id*="email"],[class*="mail"],[id*="mail"]').all()) {
+          const t = await el.innerText().catch(() => '');
+          for (const em of extractEmails(t)) found.add(em);
         }
 
-        const telEls = await wp.locator('a[href^="tel:"]').all();
-        for (const el of telEls) {
-          const href = await el.getAttribute('href');
-          if (href) {
-            const num = href.replace('tel:', '').split(/[;,#]/)[0].trim().replace(/[^\d+]/g, '');
-            if (num.length >= 10 && !phones.includes(num)) phones.push(num);
-          }
+        const tels = await wp.locator('a[href^="tel:"]').all();
+        for (const el of tels) {
+          const h = await el.getAttribute('href');
+          if (h) { const n = h.replace('tel:', '').split(/[;,#]/)[0].trim().replace(/[^\d+]/g, ''); if (n.length >= 10 && !phones.includes(n)) phones.push(n); }
         }
 
-        for (const em of pageEmails) emails.add(em);
+        for (const em of found) emails.add(em);
       } catch {}
     }
   } catch {}
