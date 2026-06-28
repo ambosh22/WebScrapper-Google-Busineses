@@ -185,13 +185,28 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
             }
           }
 
-          for (const sel of ['a[data-item-id*="authority"]', 'a[href^="http"][rel="noopener"]']) {
+          for (const sel of [
+            'a[aria-label*="Website" i]',
+            'a[aria-label*="website" i]',
+            'a[data-item-id*="authority"]',
+            'a[href^="http"][rel="noopener"]',
+            'a[role="link"][href^="http"]',
+          ]) {
             const wsEl = page.locator(sel);
-              if (await wsEl.count() > 0) {
-                const href = await wsEl.first().getAttribute('href');
+            if (await wsEl.count() > 0) {
+              const href = await wsEl.first().getAttribute('href');
               website = cleanWebsiteUrl(href);
               if (website) break;
             }
+          }
+
+          if (!website) {
+            const allLinks = await page.evaluate(() =>
+              Array.from(document.querySelectorAll('a[href]'))
+                .map(a => a.href)
+                .filter(h => h.startsWith('http') && !h.includes('google'))
+            );
+            if (allLinks.length > 0) website = allLinks[0];
           }
 
           const detailPhones = extractPhones(bodyText);
@@ -211,6 +226,19 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
               const href = await cardLink.first().getAttribute('href');
               website = cleanWebsiteUrl(href);
             }
+          } catch {}
+        }
+
+        if (!website) {
+          try {
+            website = await page.evaluate(() => {
+              const els = document.querySelectorAll('a[href]:not([href*="google"]):not([href*="maps"])');
+              for (const el of els) {
+                const h = el.href;
+                if (h && h.startsWith('http') && !h.includes('google') && !h.includes('maps')) return h;
+              }
+              return '';
+            });
           } catch {}
         }
 
