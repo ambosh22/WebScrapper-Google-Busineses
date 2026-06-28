@@ -84,11 +84,13 @@ async function fetchWebsiteData(ctx, url) {
   try {
     const parsed = new URL(url);
     const baseDomain = `${parsed.protocol}//${parsed.host}`;
-    for (const p of CONTACT_PATHS) {
+    const pages = ['/', '/contact', '/about'];
+    for (const p of pages) {
       try {
-        await wp.goto(baseDomain + p, { waitUntil: 'domcontentloaded', timeout: 8000 });
-        await randSleep(0.3, 0.6);
-        const text = await wp.evaluate(() => document.body.innerText);
+        await wp.goto(p === '/' ? url : baseDomain + p, { waitUntil: 'load', timeout: 10000 });
+        await randSleep(0.5, 1.0);
+        try { await wp.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); await randSleep(0.2, 0.5); } catch {}
+        const text = await wp.evaluate(() => document.body.innerText || document.documentElement.outerText || '');
         for (const ph of extractPhones(text)) if (!phones.includes(ph)) phones.push(ph);
         for (const em of extractEmails(text)) emails.add(em);
         const mailtoEls = await wp.locator('a[href^="mailto:"]').all();
@@ -99,6 +101,10 @@ async function fetchWebsiteData(ctx, url) {
             if (e && e.includes('@') && !emails.has(e.toLowerCase())) emails.add(e);
           }
         }
+        try {
+          const html = await wp.evaluate(() => document.documentElement.outerHTML);
+          for (const em of extractEmails(html)) emails.add(em);
+        } catch {}
         if (emails.size >= 2) break;
       } catch {}
     }
