@@ -11,6 +11,19 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const User = require('./models/User');
 const { runScraper } = require('./scraper');
+const { execSync } = require('child_process');
+
+const PW_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(os.homedir(), '.cache', 'ms-playwright');
+const PW_CHROMIUM_DIR = path.join(PW_BROWSERS_PATH, 'chromium-1228');
+if (!fs.existsSync(PW_CHROMIUM_DIR)) {
+  console.log('Playwright chromium not found — installing...');
+  try {
+    execSync(`PLAYWRIGHT_BROWSERS_PATH=${PW_BROWSERS_PATH} npx --no-install playwright install chromium`, { stdio: 'inherit', timeout: 180000 });
+    console.log('Playwright chromium installed');
+  } catch (e) {
+    console.error('Playwright install failed:', e.message);
+  }
+}
 
 const app = express();
 
