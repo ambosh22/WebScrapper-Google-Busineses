@@ -15,11 +15,19 @@ const VIEWPORTS = [
   { width: 1440, height: 900 },
 ];
 
-function randSleep(min = 0.3, max = 1.2) {
+const CONTACT_KEYWORDS = /contact|about|team|staff|support|location|find|help|info/i;
+const SKIP_KEYWORDS = /facebook|twitter|linkedin|instagram|youtube|wp-content|wp-includes|wp-json|cdn-cgi|\.pdf|\.doc|\.docx|\.xls|\.zip|\.png|\.jpg|\.jpeg|\.gif|\.svg|\.css|\.js/i;
+
+const NAV_TIMEOUT = 10000;
+const PAGE_TIMEOUT = 8000;
+const MAX_RETRIES = 2;
+
+function randSleep(min = 0.2, max = 0.5) {
   return new Promise(r => setTimeout(r, (Math.random() * (max - min) + min) * 1000));
 }
 
 function extractPhones(text) {
+  if (!text) return [];
   const phones = [];
   const seen = new Set();
   const patterns = [
@@ -41,6 +49,7 @@ function extractPhones(text) {
 }
 
 function extractEmails(text) {
+  if (!text) return [];
   const emails = [];
   const seen = new Set();
   const pat = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
@@ -75,7 +84,68 @@ function cleanWebsiteUrl(href) {
   return href.split('?')[0].replace(/\/$/, '');
 }
 
-const CONTACT_PATHS = ['/contact', '/about', '/contact-us', '/about-us', '/get-in-touch'];
+function createContext(browser) {
+  return browser.newContext({
+    userAgent: USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
+    viewport: VIEWPORTS[Math.floor(Math.random() * VIEWPORTS.length)],
+  });
+}
+
+async function withRetry(name, fn, retries = MAX_RETRIES) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (i === retries) throw err;
+      console.error(`[RETRY] ${name} attempt ${i + 1} failed: ${err.message}`);
+      await randSleep(0.5, 1.0);
+    }
+  }
+}
+
+async function extractPageData(page) {
+  const phones = [];
+  const emails = new Set();
+  try {
+    const text = await page.evaluate(() => document.body.innerText || document.documentElement.outerText || '');
+    for (const ph of extractPhones(text)) if (!phones.includes(ph)) phones.push(ph);
+    for (const em of extractEmails(text)) emails.add(em);
+    const mailtoEls = await page.locator('a[href^="mailto:"]').all();
+    for (const el of mailtoEls) {
+      const href = await el.getAttribute('href');
+      if (href) {
+        const e = href.replace('mailto:', '').split('?')[0].trim();
+        if (e && e.includes('@') && !emails.has(e.toLowerCase())) emails.add(e);
+      }
+    }
+    try {
+      const html = await page.evaluate(() => document.documentElement.outerHTML);
+      for (const em of extractEmails(html)) emails.add(em);
+    } catch {}
+  } catch {}
+  return { phones, emails };
+}
+
+function discoverLinks(page, domain) {
+  return page.evaluate((d) => {
+    const result = [];
+    const seen = new Set();
+    const skip = /facebook|twitter|linkedin|instagram|youtube|wp-content|wp-includes|wp-json|cdn-cgi|\.pdf|\.doc|\.docx|\.xls|\.zip|\.png|\.jpg|\.jpeg|\.gif|\.svg|\.css|\.js/i;
+    for (const a of document.querySelectorAll('a[href]')) {
+      try {
+        const href = a.href.split('#')[0].split('?')[0].replace(/\/$/, '');
+        const u = new URL(href);
+        if (u.hostname.replace(/^www\./, '') === d && !seen.has(href) && !skip.test(href)) {
+          seen.add(href);
+          result.push(href);
+        }
+      } catch {}
+    }
+    return result;
+  }, domain.replace(/^www\./, ''));
+}
+
+const CONTACT_PATHS = ['/contact', '/about', '/contact-us', '/about-us', '/get-in-touch', '/support', '/location'];
 
 async function fetchWebsiteData(ctx, url) {
   const wp = await ctx.newPage();
@@ -87,51 +157,46 @@ async function fetchWebsiteData(ctx, url) {
     const base = `${parsed.protocol}//${parsed.host}`;
     const domain = parsed.hostname.replace(/^www\./, '');
     const queue = CONTACT_PATHS.map(p => base + p);
+    let attemptedHomepage = false;
 
-    while (queue.length > 0 && emails.size < 2 && visited.size < 8) {
+    while (queue.length > 0 && emails.size < 2 && visited.size < 6) {
       const target = queue.shift();
       if (visited.has(target)) continue;
       visited.add(target);
       try {
-        await wp.goto(target, { waitUntil: 'domcontentloaded', timeout: 8000 });
-        await randSleep(0.3, 0.6);
-        try { await wp.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); await randSleep(0.2, 0.3); } catch {}
-        const text = await wp.evaluate(() => document.body.innerText || document.documentElement.outerText || '');
-        for (const ph of extractPhones(text)) if (!phones.includes(ph)) phones.push(ph);
-        for (const em of extractEmails(text)) emails.add(em);
-        const mailtoEls = await wp.locator('a[href^="mailto:"]').all();
-        for (const el of mailtoEls) {
-          const href = await el.getAttribute('href');
-          if (href) {
-            const e = href.replace('mailto:', '').split('?')[0].trim();
-            if (e && e.includes('@') && !emails.has(e.toLowerCase())) emails.add(e);
-          }
-        }
-        try {
-          const html = await wp.evaluate(() => document.documentElement.outerHTML);
-          for (const em of extractEmails(html)) emails.add(em);
-        } catch {}
+        await withRetry(`goto ${target}`, () =>
+          wp.goto(target, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT })
+        );
+        await randSleep(0.2, 0.4);
+        try { await wp.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); } catch {}
 
-        if (emails.size < 2) {
+        const { phones: newPhones, emails: newEmails } = await extractPageData(wp);
+        for (const ph of newPhones) if (!phones.includes(ph)) phones.push(ph);
+        for (const em of newEmails) emails.add(em);
+        if (emails.size >= 2) break;
+
+        if (visited.size < 4) {
           try {
-            const links = await wp.evaluate((d) => {
-              const r = [];
-              for (const a of document.querySelectorAll('a[href]')) {
-                try {
-                  const h = a.href.split('#')[0].split('?')[0].replace(/\/$/, '');
-                  const u = new URL(h);
-                  if (u.hostname.replace(/^www\./, '') === d && h.match(/contact|about|team|staff|support|location|find/i) && !r.includes(h)) {
-                    r.push(h);
-                  }
-                } catch {}
-              }
-              return r;
-            }, domain);
+            const links = await discoverLinks(wp, domain);
+            const prioritized = links.filter(l => CONTACT_KEYWORDS.test(l));
+            for (const link of prioritized) {
+              if (!visited.has(link) && !queue.includes(link)) queue.push(link);
+            }
             for (const link of links) {
               if (!visited.has(link) && !queue.includes(link)) queue.push(link);
             }
           } catch {}
         }
+      } catch {}
+    }
+
+    if (emails.size < 2 && !attemptedHomepage) {
+      try {
+        await wp.goto(url, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT });
+        await randSleep(0.3, 0.6);
+        const { phones: hp, emails: he } = await extractPageData(wp);
+        for (const ph of hp) if (!phones.includes(ph)) phones.push(ph);
+        for (const em of he) emails.add(em);
       } catch {}
     }
   } catch {}
@@ -140,35 +205,59 @@ async function fetchWebsiteData(ctx, url) {
 }
 
 async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, currentTotal, seenPhones, seenNameCity, onProgress) {
-  const ctx = await browser.newContext({
-    userAgent: USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
-    viewport: VIEWPORTS[Math.floor(Math.random() * VIEWPORTS.length)],
-  });
-  const page = await ctx.newPage();
+  let ctx;
+  let page;
   const results = [];
   try {
+    ctx = await createContext(browser);
+    page = await ctx.newPage();
     const query = encodeURIComponent(niche.replace(/ /g, '+'));
     const searchUrl = `https://www.google.com/maps/search/${query}+in+${city},+${state}/`;
-    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await randSleep(1.5, 3.0);
 
+    await withRetry(`maps search ${city}`, () =>
+      page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT })
+    );
+    await randSleep(2.0, 3.5);
+
+    let cards = page.locator('[class*="Nv2PK"]');
+    let cardCount = 0;
     try {
-      await page.waitForSelector('[class*="Nv2PK"]', { timeout: 15000 });
-    } catch {
-      return results;
+      cardCount = await cards.count();
+    } catch {}
+
+    if (cardCount === 0) {
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await randSleep(1.0, 2.0);
+      cards = page.locator('[class*="Nv2PK"]');
+      try {
+        cardCount = await cards.count();
+      } catch {}
     }
+
+    if (cardCount === 0) {
+      try {
+        await page.waitForSelector('[class*="Nv2PK"]', { timeout: 15000 });
+        cardCount = await cards.count();
+      } catch {
+        return results;
+      }
+    }
+
+    if (cardCount === 0) return results;
 
     let prevCount = 0;
-    for (let s = 0; s < 12; s++) {
-      try { await page.evaluate(() => document.querySelector('[role=feed]')?.scrollBy(0, 2500)); } catch {}
-      await randSleep(0.3, 0.6);
-      const cur = await page.locator('[class*="Nv2PK"]').count();
-      if (s > 2 && cur === prevCount) break;
-      prevCount = cur;
+    for (let s = 0; s < 10; s++) {
+      try { await page.evaluate(() => document.querySelector('[role=feed]')?.scrollBy(0, 2000)); } catch {}
+      await randSleep(0.3, 0.5);
+      try {
+        const cur = await cards.count();
+        if (s > 2 && cur === prevCount) break;
+        prevCount = cur;
+      } catch { break; }
     }
 
-    await randSleep(0.8, 1.5);
-    const cards = page.locator('[class*="Nv2PK"]');
+    await randSleep(0.5, 1.0);
+    cards = page.locator('[class*="Nv2PK"]');
     const total = Math.min(await cards.count(), maxCount, maxTotal - currentTotal);
     if (total <= 0) return results;
 
@@ -200,13 +289,13 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
         seenNameCity.add(nameCityKey);
 
         await cards.nth(i).click();
-        await randSleep(0.3, 0.8);
+        await randSleep(0.3, 0.6);
 
         const emails = [];
         let website = '';
         try {
           await page.keyboard.press('Escape');
-          await randSleep(0.1, 0.3);
+          await randSleep(0.1, 0.2);
           const bodyText = await page.evaluate(() => document.body.innerText);
 
           for (const e of extractEmails(bodyText)) if (!emails.includes(e)) emails.push(e);
@@ -234,8 +323,7 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
 
           if (!website) {
             website = await page.evaluate(() => {
-              const els = document.querySelectorAll('a[href]:not([href*="google"]):not([href*="maps"])');
-              for (const el of els) {
+              for (const el of document.querySelectorAll('a[href]')) {
                 const h = el.href;
                 if (h && h.startsWith('http') && !h.includes('google') && !h.includes('maps')) return h;
               }
@@ -268,7 +356,9 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
             const { phones: sp, emails: se } = await fetchWebsiteData(ctx, website);
             for (const e of se) if (!emails.find(x => x.toLowerCase() === e.toLowerCase())) emails.push(e);
             for (const p of sp) if (!phones.includes(p)) phones.push(p);
-          } catch {}
+          } catch (err) {
+            console.error(`[WEBSITE] ${name}: fetchWebsiteData failed: ${err.message}`);
+          }
         }
 
         const phonesFmt = phones.slice(0, 1).map(formatPhone);
@@ -280,11 +370,12 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
         };
         results.push(entry);
         if (onProgress) onProgress('business', { entry });
-        await randSleep(0.2, 0.6);
+        await randSleep(0.2, 0.4);
       } catch {}
     }
   } catch {} finally {
-    await ctx.close();
+    if (page) try { await page.close(); } catch {}
+    if (ctx) try { await ctx.close(); } catch {}
   }
   return results;
 }
