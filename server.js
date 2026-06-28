@@ -158,8 +158,15 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+function requireDb(req, res, next) {
+  if (!process.env.MONGODB_URI) {
+    return res.status(503).json({ error: 'MongoDB not configured — set MONGODB_URI environment variable' });
+  }
+  next();
+}
+
 // --- Admin endpoints ---
-app.get('/api/admin/stats', requireAdmin, async (req, res) => {
+app.get('/api/admin/stats', requireAdmin, requireDb, async (req, res) => {
   try {
     const totalUsers = await User.countDocuments();
     const adminUsers = await User.countDocuments({ role: 'admin' });
@@ -180,14 +187,14 @@ app.get('/api/admin/stats', requireAdmin, async (req, res) => {
   } catch { res.status(500).json({ error: 'Server error' }); }
 });
 
-app.get('/api/admin/users', requireAdmin, async (req, res) => {
+app.get('/api/admin/users', requireAdmin, requireDb, async (req, res) => {
   try {
     const users = await User.find({}, { password: 0 }).sort({ createdAt: -1 });
     res.json(users);
   } catch { res.status(500).json({ error: 'Server error' }); }
 });
 
-app.post('/api/admin/users', requireAdmin, async (req, res) => {
+app.post('/api/admin/users', requireAdmin, requireDb, async (req, res) => {
   const username = sanitize(req.body.username);
   const password = req.body.password || '';
   if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
@@ -201,7 +208,7 @@ app.post('/api/admin/users', requireAdmin, async (req, res) => {
   } catch { res.status(500).json({ error: 'Server error' }); }
 });
 
-app.put('/api/admin/users/:id', requireAdmin, async (req, res) => {
+app.put('/api/admin/users/:id', requireAdmin, requireDb, async (req, res) => {
   const username = sanitize(req.body.username);
   const password = req.body.password || '';
   if (!username) return res.status(400).json({ error: 'Username required' });
@@ -221,7 +228,7 @@ app.put('/api/admin/users/:id', requireAdmin, async (req, res) => {
   } catch { res.status(500).json({ error: 'Server error' }); }
 });
 
-app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
+app.delete('/api/admin/users/:id', requireAdmin, requireDb, async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -231,7 +238,7 @@ app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
   } catch { res.status(500).json({ error: 'Server error' }); }
 });
 
-app.put('/api/admin/users/:id/subscribe', requireAdmin, async (req, res) => {
+app.put('/api/admin/users/:id/subscribe', requireAdmin, requireDb, async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -245,6 +252,7 @@ app.put('/api/admin/users/:id/subscribe', requireAdmin, async (req, res) => {
 
 // --- Scrape limit middleware ---
 async function checkScrapeLimit(req, res, next) {
+  if (!process.env.MONGODB_URI) return res.status(503).json({ error: 'MongoDB not configured — scraping requires a database' });
   try {
     const user = await User.findById(req.userId);
     if (!user) return res.status(401).json({ error: 'User not found' });
@@ -409,7 +417,7 @@ function runPythonScraper(state, cities, niche, maxPerCity, jobId, maxTotal = 10
   });
 }
 
-app.put('/api/admin/users/:id/hold', requireAdmin, async (req, res) => {
+app.put('/api/admin/users/:id/hold', requireAdmin, requireDb, async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
