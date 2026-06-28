@@ -12,6 +12,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     const res = await fetch('/api/me', { headers: { 'Authorization': 'Bearer ' + token } });
     if (res.ok) {
       const data = await res.json();
+      if (data.onHold) {
+        localStorage.removeItem('token');
+        token = null;
+        document.getElementById('holdModal').style.display = 'flex';
+        return;
+      }
       userRole = data.role;
       showApp();
       return;
@@ -61,6 +67,13 @@ async function setAdminNav() {
     const res = await fetch('/api/me', { headers: { 'Authorization': 'Bearer ' + token } });
     if (res.ok) {
       const data = await res.json();
+      if (data.onHold) {
+        localStorage.removeItem('token');
+        token = null;
+        showLogin();
+        document.getElementById('holdModal').style.display = 'flex';
+        return;
+      }
       userRole = data.role;
       nav.style.display = userRole === 'admin' ? 'flex' : 'none';
     } else {
