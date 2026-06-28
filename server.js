@@ -45,12 +45,28 @@ app.use(express.static('public', { maxAge: 0 }));
 const PORT = process.env.PORT || 3000;
 
 // --- MongoDB ---
+async function autoSeedAdmin() {
+  try {
+    const count = await User.countDocuments();
+    if (count === 0) {
+      const hashed = await bcrypt.hash('admin123', 10);
+      await User.create({ username: 'admin', password: hashed, role: 'admin' });
+      console.log('Auto-seeded admin user (admin/admin123)');
+    }
+  } catch (err) {
+    console.error('Auto-seed admin failed:', err.message);
+  }
+}
+
 if (process.env.MONGODB_URI) {
   mongoose.connect(process.env.MONGODB_URI, {
     serverSelectionTimeoutMS: 15000,
     tlsAllowInvalidCertificates: true,
   })
-    .then(() => console.log('MongoDB connected'))
+    .then(() => {
+      console.log('MongoDB connected');
+      autoSeedAdmin();
+    })
     .catch(err => console.error('MongoDB connection error:', err.message));
 } else {
   console.log('MongoDB: no MONGODB_URI set — auth/rate-limit features disabled');
