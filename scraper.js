@@ -75,7 +75,7 @@ function cleanWebsiteUrl(href) {
   return href.split('?')[0].replace(/\/$/, '');
 }
 
-const CONTACT_PATHS = ['/contact', '/about'];
+const CONTACT_PATHS = ['/contact', '/about', '/contact-us', '/about-us', '/get-in-touch'];
 
 async function fetchWebsiteData(ctx, url) {
   const wp = await ctx.newPage();
@@ -84,12 +84,11 @@ async function fetchWebsiteData(ctx, url) {
   try {
     const parsed = new URL(url);
     const baseDomain = `${parsed.protocol}//${parsed.host}`;
-    const pages = ['/', '/contact', '/about'];
-    for (const p of pages) {
+    for (const p of CONTACT_PATHS) {
       try {
-        await wp.goto(p === '/' ? url : baseDomain + p, { waitUntil: 'load', timeout: 10000 });
-        await randSleep(0.5, 1.0);
-        try { await wp.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); await randSleep(0.2, 0.5); } catch {}
+        await wp.goto(baseDomain + p, { waitUntil: 'domcontentloaded', timeout: 8000 });
+        await randSleep(0.3, 0.6);
+        try { await wp.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); await randSleep(0.2, 0.4); } catch {}
         const text = await wp.evaluate(() => document.body.innerText || document.documentElement.outerText || '');
         for (const ph of extractPhones(text)) if (!phones.includes(ph)) phones.push(ph);
         for (const em of extractEmails(text)) emails.add(em);
@@ -110,7 +109,7 @@ async function fetchWebsiteData(ctx, url) {
     }
   } catch {}
   await wp.close();
-  return { phones: phones.slice(0, 2), emails: [...emails].slice(0, 3) };
+  return { phones: phones.slice(0, 2), emails: [...emails].slice(0, 5) };
 }
 
 async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, currentTotal, seenPhones, seenNameCity, onProgress) {
