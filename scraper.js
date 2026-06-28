@@ -18,9 +18,9 @@ const VIEWPORTS = [
 const CONTACT_KEYWORDS = /contact|about|team|staff|support|location|find|help|info/i;
 const SKIP_KEYWORDS = /facebook|twitter|linkedin|instagram|youtube|wp-content|wp-includes|wp-json|cdn-cgi|\.pdf|\.doc|\.docx|\.xls|\.zip|\.png|\.jpg|\.jpeg|\.gif|\.svg|\.css|\.js/i;
 
-const NAV_TIMEOUT = 10000;
+const NAV_TIMEOUT = 30000;
 const PAGE_TIMEOUT = 8000;
-const MAX_RETRIES = 2;
+const MAX_RETRIES = 1;
 
 function randSleep(min = 0.2, max = 0.5) {
   return new Promise(r => setTimeout(r, (Math.random() * (max - min) + min) * 1000));
@@ -148,6 +148,9 @@ function discoverLinks(page, domain) {
 const CONTACT_PATHS = ['/contact', '/about', '/contact-us', '/about-us', '/get-in-touch', '/support', '/location'];
 
 async function fetchWebsiteData(ctx, url) {
+  const timeout = 30000;
+  const timer = new Promise((_, reject) => setTimeout(() => reject(new Error(`Website crawl timed out: ${url}`)), timeout));
+  const work = (async () => {
   const wp = await ctx.newPage();
   const phones = [];
   const emails = new Set();
@@ -157,7 +160,6 @@ async function fetchWebsiteData(ctx, url) {
     const base = `${parsed.protocol}//${parsed.host}`;
     const domain = parsed.hostname.replace(/^www\./, '');
     const queue = CONTACT_PATHS.map(p => base + p);
-    let attemptedHomepage = false;
 
     while (queue.length > 0 && emails.size < 2 && visited.size < 6) {
       const target = queue.shift();
@@ -190,7 +192,7 @@ async function fetchWebsiteData(ctx, url) {
       } catch {}
     }
 
-    if (emails.size < 2 && !attemptedHomepage) {
+    if (emails.size < 2 && !visited.has(url)) {
       try {
         await wp.goto(url, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT });
         await randSleep(0.3, 0.6);
@@ -202,9 +204,14 @@ async function fetchWebsiteData(ctx, url) {
   } catch {}
   await wp.close();
   return { phones: phones.slice(0, 2), emails: [...emails].slice(0, 5) };
+  })();
+  return Promise.race([work, timer]);
 }
 
 async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, currentTotal, seenPhones, seenNameCity, onProgress) {
+  const timeout = 120000;
+  const timer = new Promise((_, reject) => setTimeout(() => reject(new Error(`City ${city} timed out after ${timeout/1000}s`)), timeout));
+  const work = (async () => {
   let ctx;
   let page;
   const results = [];
@@ -214,10 +221,13 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
     const query = encodeURIComponent(niche.replace(/ /g, '+'));
     const searchUrl = `https://www.google.com/maps/search/${query}+in+${city},+${state}/`;
 
-    await withRetry(`maps search ${city}`, () =>
-      page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT })
-    );
-    await randSleep(2.0, 3.5);
+    if (onProgress) onProgress('status', { message: `Searching Maps for ${city}...` });
+    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(async (err) => {
+      console.error(`[MAPS] ${city}: first goto failed: ${err.message}, retrying...`);
+      await randSleep(1.0, 2.0);
+      await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+    });
+    await randSleep(1.5, 2.5);
 
     let cards = page.locator('[class*="Nv2PK"]');
     let cardCount = 0;
@@ -378,6 +388,11 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
     if (ctx) try { await ctx.close(); } catch {}
   }
   return results;
+  })();
+  return Promise.race([work, timer]).catch(err => {
+    console.error(`[CITY] ${err.message}`);
+    return [];
+  });
 }
 
 async function runScraper({ state, cities, niche, maxPerCity, maxTotal, onProgress }) {
