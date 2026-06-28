@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit');
 const XLSX = require('xlsx');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const mongoose = require('mongoose');
@@ -235,8 +236,8 @@ async function checkScrapeLimit(req, res, next) {
     next();
   } catch { res.status(500).json({ error: 'Server error' }); }
 }
-const JOBS_DIR = path.join(__dirname, 'jobs');
-if (!fs.existsSync(JOBS_DIR)) fs.mkdirSync(JOBS_DIR);
+const JOBS_DIR = path.join(os.tmpdir(), 'web2-jobs');
+if (!fs.existsSync(JOBS_DIR)) try { fs.mkdirSync(JOBS_DIR, { recursive: true }); } catch {}
 
 const CITIES = {
   "Alabama": ["Birmingham","Montgomery","Mobile","Huntsville","Tuscaloosa","Hoover","Auburn","Dothan","Madison","Decatur","Florence","Gadsden","Vestavia Hills","Prattville","Phenix City"],
