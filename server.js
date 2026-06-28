@@ -1,4 +1,4 @@
-require('dotenv').config();
+try { require('dotenv').config(); } catch {} // optional — platform env vars work too
 const express = require('express');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
