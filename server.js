@@ -299,6 +299,7 @@ async function checkScrapeLimit(req, res, next) {
     const user = await User.findById(req.userId);
     if (!user) return res.status(401).json({ error: 'User not found' });
     if (user.onHold) return res.status(403).json({ error: 'Account on hold — contact admin' });
+    if (user.role === 'admin') return next();
     const today = new Date().toISOString().split('T')[0];
     if (user.lastScrapeDate !== today) {
       user.scrapeCount = 0;
