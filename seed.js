@@ -9,6 +9,8 @@ async function seed() {
 
   const users = [
     { username: 'admin', password: 'admin123' },
+    { username: 'user1', password: 'user1234' },
+    { username: 'user2', password: 'user1234' },
   ];
 
   for (const u of users) {
