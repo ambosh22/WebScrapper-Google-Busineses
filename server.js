@@ -8,7 +8,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const mongoose = require('mongoose');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const User = require('./models/User');
 
 const app = express();
@@ -44,12 +44,16 @@ app.use(express.static('public', { maxAge: 0 }));
 const PORT = process.env.PORT || 3000;
 
 // --- MongoDB ---
-mongoose.connect(process.env.MONGODB_URI, {
-  serverSelectionTimeoutMS: 15000,
-  tlsAllowInvalidCertificates: true,
-})
-  .then(() => console.log('MongoDB connected'))
-  .catch(err => { console.error('MongoDB connection error:', err.message); process.exit(1); });
+if (process.env.MONGODB_URI) {
+  mongoose.connect(process.env.MONGODB_URI, {
+    serverSelectionTimeoutMS: 15000,
+    tlsAllowInvalidCertificates: true,
+  })
+    .then(() => console.log('MongoDB connected'))
+    .catch(err => console.error('MongoDB connection error:', err.message));
+} else {
+  console.log('MongoDB: no MONGODB_URI set — auth/rate-limit features disabled');
+}
 
 // --- Auth ---
 const TOKEN_EXPIRY_MS = 24 * 60 * 60 * 1000;
@@ -601,8 +605,12 @@ try {
   }
 } catch {}
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`Network access: http://0.0.0.0:${PORT}`);
-  console.log(`Python scraper: ${path.join(__dirname, 'scraper.py')}`);
-});
+if (require.main === module) {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Network access: http://0.0.0.0:${PORT}`);
+    console.log(`Python scraper: ${path.join(__dirname, 'scraper.py')}`);
+  });
+}
+
+module.exports = app;
