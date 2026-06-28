@@ -115,8 +115,10 @@ app.post('/api/login', loginLimiter, async (req, res) => {
         await user.save();
       }
       if (user.onHold && user.role !== 'admin') {
+        console.log(`[LOGIN] Blocked held user: ${username}, onHold=${user.onHold}, role=${user.role}`);
         return res.json({ onHold: true, role: user.role });
       }
+      console.log(`[LOGIN] Allowed user: ${username}, onHold=${user.onHold}, role=${user.role}`);
     } else {
       if (username !== FALLBACK_ADMIN.username || password !== FALLBACK_ADMIN.password) {
         return res.status(401).json({ error: 'Invalid username or password' });
@@ -127,7 +129,10 @@ app.post('/api/login', loginLimiter, async (req, res) => {
     const token = generateToken();
     tokens[token] = { userId: user._id.toString(), username: user.username, role, expiresAt: Date.now() + TOKEN_EXPIRY_MS };
     res.json({ token, role });
-  } catch { res.status(500).json({ error: 'Server error' }); }
+  } catch (err) {
+    console.error('[LOGIN] Error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 function getSession(req) {
@@ -201,6 +206,7 @@ app.get('/api/admin/users', requireAdmin, async (req, res) => {
   if (!process.env.MONGODB_URI) return res.json([]);
   try {
     const users = await User.find({}, { password: 0 }).sort({ createdAt: -1 });
+    users.forEach(u => console.log(`[USERS] ${u.username}: onHold=${u.onHold}, role=${u.role}`));
     res.json(users);
   } catch { res.status(500).json({ error: 'Server error' }); }
 });
@@ -377,10 +383,15 @@ app.put('/api/admin/users/:id/hold', requireAdmin, async (req, res) => {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (user.role === 'admin') return res.status(403).json({ error: 'Cannot hold admin users' });
+    const before = user.onHold;
     user.onHold = !user.onHold;
     await user.save();
+    console.log(`[HOLD] ${user.username}: ${before} -> ${user.onHold}`);
     res.json({ _id: user._id, username: user.username, onHold: user.onHold });
-  } catch { res.status(500).json({ error: 'Server error' }); }
+  } catch (err) {
+    console.error('[HOLD] Error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 app.post('/api/scrape', requireAuth, checkScrapeLimit, async (req, res) => {
