@@ -255,7 +255,9 @@ async function runScraper({ state, cities, niche, maxPerCity, maxTotal, onProgre
       timeout: 30000,
       args: [
         '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-        '--disable-gpu', '--single-process', '--no-zygote',
+        '--disable-gpu', '--no-zygote',
+        '--disable-accelerated-2d-canvas', '--disable-accelerated-video-decode',
+        '--js-flags=--max_old_space_size=256',
         '--disable-web-security',
       ],
     });
@@ -267,7 +269,7 @@ async function runScraper({ state, cities, niche, maxPerCity, maxTotal, onProgre
 
   if (onProgress) onProgress('status', { message: 'Browser ready, starting scrape...' });
   try {
-    const parallel = 3;
+    const parallel = 1;
     for (let i = 0; i < cities.length; i += parallel) {
       if (allResults.length >= maxTotal) break;
       const batch = cities.slice(i, i + parallel);
