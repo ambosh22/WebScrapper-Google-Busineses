@@ -2,7 +2,7 @@ services:
   - type: web
     name: google-maps-scraper
     runtime: node
-    buildCommand: npm install && PLAYWRIGHT_BROWSERS_PATH=/opt/render/.cache/ms-playwright npx --no-install playwright install chromium
+    buildCommand: npm install && PLAYWRIGHT_BROWSERS_PATH=/opt/render/.cache/ms-playwright node node_modules/playwright/cli.js install chromium-headless-shell
     startCommand: node server.js
     envVars:
       - key: NODE_VERSION

@@ -14,15 +14,22 @@ const { runScraper } = require('./scraper');
 const { execSync } = require('child_process');
 
 const PW_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(os.homedir(), '.cache', 'ms-playwright');
-const PW_CHROMIUM_DIR = path.join(PW_BROWSERS_PATH, 'chromium_headless_shell-1228');
-if (!fs.existsSync(PW_CHROMIUM_DIR)) {
-  console.log('Playwright chromium_headless_shell not found — installing...');
-  try {
-    execSync(`PLAYWRIGHT_BROWSERS_PATH=${PW_BROWSERS_PATH} node node_modules/playwright/cli.js install chromium`, { stdio: 'inherit', timeout: 180000 });
-    console.log('Playwright chromium installed');
-  } catch (e) {
-    console.error('Playwright install failed:', e.message);
-  }
+let PW_BROWSERS_READY = false;
+
+if (fs.existsSync(path.join(PW_BROWSERS_PATH, 'chromium_headless_shell-1228'))) {
+  PW_BROWSERS_READY = true;
+} else {
+  console.log('Playwright browsers not found — installing asynchronously...');
+  const proc = require('child_process').exec(
+    `PLAYWRIGHT_BROWSERS_PATH=${PW_BROWSERS_PATH} node node_modules/playwright/cli.js install chromium-headless-shell`,
+    { timeout: 180000 },
+    (err) => {
+      if (err) console.error('Playwright install failed:', err.message);
+      else { console.log('Playwright browsers installed'); PW_BROWSERS_READY = true; }
+    }
+  );
+  proc.stdout?.pipe(process.stdout);
+  proc.stderr?.pipe(process.stderr);
 }
 
 const app = express();
@@ -416,6 +423,9 @@ app.post('/api/scrape', requireAuth, checkScrapeLimit, async (req, res) => {
   const state = sanitize(req.body.state);
   const selectedCities = Array.isArray(req.body.cities) ? req.body.cities.map(sanitize).filter(Boolean) : [];
   const niche = sanitize(req.body.niche) || 'businesses';
+  if (!PW_BROWSERS_READY) {
+    return res.status(503).json({ error: 'Browser still downloading. Try again in 1-2 minutes.' });
+  }
   if (!state || !CITIES[state]) {
     return res.status(400).json({ error: 'Invalid state selected' });
   }
