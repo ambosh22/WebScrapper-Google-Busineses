@@ -61,6 +61,15 @@ function extractEmails(text) {
       emails.push(m[0]);
     }
   }
+  const obfPat = /([a-zA-Z0-9._%+-]+)\s*(?:\[?@\]?|\[?at\]?|\(?at\)?)\s*([a-zA-Z0-9.-]+)\s*(?:\[?dot\]?|\[?\.\]?|\(?dot\)?)\s*([a-zA-Z]{2,})/gi;
+  let om;
+  while ((om = obfPat.exec(text)) !== null) {
+    const em = `${om[1]}@${om[2]}.${om[3]}`.toLowerCase();
+    if (!seen.has(em) && !em.match(/\.(png|jpg|jpeg|gif|svg|css|js)$/)) {
+      seen.add(em);
+      emails.push(em);
+    }
+  }
   return emails;
 }
 
@@ -116,6 +125,14 @@ async function extractPageData(page) {
       if (href) {
         const e = href.replace('mailto:', '').split('?')[0].trim();
         if (e && e.includes('@') && !emails.has(e.toLowerCase())) emails.add(e);
+      }
+    }
+    const telEls = await page.locator('a[href^="tel:"]').all();
+    for (const el of telEls) {
+      const href = await el.getAttribute('href');
+      if (href) {
+        const num = href.replace('tel:', '').split(/[;,#]/)[0].trim().replace(/[^\d+]/g, '');
+        if (num.length >= 10 && !phones.includes(num)) phones.push(num);
       }
     }
     try {
@@ -315,6 +332,14 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
             if (href) {
               const e = href.replace('mailto:', '').split('?')[0].trim();
               if (e && e.includes('@') && !emails.includes(e)) emails.push(e);
+            }
+          }
+          const telEls = await page.locator('a[href^="tel:"]').all();
+          for (const el of telEls) {
+            const href = await el.getAttribute('href');
+            if (href) {
+              const num = href.replace('tel:', '').split(/[;,#]/)[0].trim().replace(/[^\d+]/g, '');
+              if (num.length >= 10 && !phones.includes(num)) phones.push(num);
             }
           }
 
