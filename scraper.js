@@ -247,12 +247,25 @@ async function runScraper({ state, cities, niche, maxPerCity, maxTotal, onProgre
   const seenPhones = new Set();
   const seenNameCity = new Set();
 
-  const browser = await chromium.launch({
-    headless: true,
-    timeout: 45000,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-web-security'],
-  });
+  let browser;
+  if (onProgress) onProgress('status', { message: 'Starting Chromium browser...' });
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      timeout: 30000,
+      args: [
+        '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+        '--disable-gpu', '--single-process', '--no-zygote',
+        '--disable-web-security',
+      ],
+    });
+  } catch (err) {
+    console.error('[SCRAPER] chromium.launch failed:', err.message);
+    if (onProgress) onProgress('error', { message: `Chromium launch failed: ${err.message}` });
+    throw err;
+  }
 
+  if (onProgress) onProgress('status', { message: 'Browser ready, starting scrape...' });
   try {
     const parallel = 3;
     for (let i = 0; i < cities.length; i += parallel) {
@@ -275,7 +288,7 @@ async function runScraper({ state, cities, niche, maxPerCity, maxTotal, onProgre
       if (allResults.length >= maxTotal) break;
     }
   } finally {
-    await browser.close();
+    if (browser) await browser.close();
   }
 
   return allResults;

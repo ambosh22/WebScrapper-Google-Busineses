@@ -381,6 +381,10 @@ function runScraperProcess(state, cities, niche, maxPerCity, jobId, maxTotal = 1
         jobs[jobId].progress = data.percent || 0;
         jobs[jobId].elapsedSecs = data.elapsedSecs || 0;
         if (data.city) jobs[jobId].completedCities = cities.indexOf(data.city) + 1;
+      } else if (type === 'status' && data.message) {
+        logEntry(jobId, data.message, 'info');
+      } else if (type === 'error' && data.message) {
+        logEntry(jobId, data.message, 'error');
       }
     }})
       .then(data => resolve({ data }))
