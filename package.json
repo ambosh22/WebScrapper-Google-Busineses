@@ -19,6 +19,7 @@
     "mongodb": "^7.3.0",
     "mongoose": "^9.7.2",
     "nodemailer": "^9.0.1",
+    "playwright": "^1.61.1",
     "serverless-http": "^4.0.0",
     "xlsx": "^0.18.5"
   }
