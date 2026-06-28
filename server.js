@@ -60,6 +60,14 @@ if (process.env.MONGODB_URI) {
 const TOKEN_EXPIRY_MS = 24 * 60 * 60 * 1000;
 const tokens = {};
 
+const FALLBACK_ADMIN = {
+  _id: 'fallback-admin',
+  username: 'admin',
+  password: process.env.ADMIN_PASSWORD || 'admin123',
+  role: 'admin',
+  onHold: false
+};
+
 function generateToken() {
   return crypto.randomBytes(32).toString('hex');
 }
@@ -80,18 +88,26 @@ app.post('/api/login', loginLimiter, async (req, res) => {
   const password = req.body.password || '';
   if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
   try {
-    const user = await User.findOne({ username });
-    if (!user) return res.status(401).json({ error: 'Invalid username or password' });
-    const match = await bcrypt.compare(password, user.password);
-    if (!match) return res.status(401).json({ error: 'Invalid username or password' });
-    if (user.username === 'admin' && user.role !== 'admin') {
-      user.role = 'admin';
-      await user.save();
+    let user;
+    if (process.env.MONGODB_URI) {
+      user = await User.findOne({ username });
+      if (!user) return res.status(401).json({ error: 'Invalid username or password' });
+      const match = await bcrypt.compare(password, user.password);
+      if (!match) return res.status(401).json({ error: 'Invalid username or password' });
+      if (user.username === 'admin' && user.role !== 'admin') {
+        user.role = 'admin';
+        await user.save();
+      }
+      if (user.onHold && user.role !== 'admin') {
+        return res.json({ onHold: true, role: user.role });
+      }
+    } else {
+      if (username !== FALLBACK_ADMIN.username || password !== FALLBACK_ADMIN.password) {
+        return res.status(401).json({ error: 'Invalid username or password' });
+      }
+      user = FALLBACK_ADMIN;
     }
-    if (user.onHold && user.role !== 'admin') {
-      return res.json({ onHold: true, role: user.role });
-    }
-    const role = user.role || (user.username === 'admin' ? 'admin' : 'user');
+    const role = user.role || 'user';
     const token = generateToken();
     tokens[token] = { userId: user._id.toString(), username: user.username, role, expiresAt: Date.now() + TOKEN_EXPIRY_MS };
     res.json({ token, role });
@@ -112,9 +128,16 @@ function getSession(req) {
 app.get('/api/me', async (req, res) => {
   const session = getSession(req);
   if (!session) return res.status(401).json({ error: 'Invalid token' });
-  const user = await User.findById(session.userId);
-  const onHold = user ? user.onHold : false;
-  res.json({ username: session.username, role: session.role, onHold });
+  if (!process.env.MONGODB_URI) {
+    return res.json({ username: session.username, role: session.role, onHold: false });
+  }
+  try {
+    const user = await User.findById(session.userId);
+    const onHold = user ? user.onHold : false;
+    res.json({ username: session.username, role: session.role, onHold });
+  } catch {
+    res.json({ username: session.username, role: session.role, onHold: false });
+  }
 });
 
 function requireAuth(req, res, next) {
