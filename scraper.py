@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import sys, json, re, asyncio, argparse, time, urllib.parse, random, os
+import sys, json, re, asyncio, argparse, time, urllib.parse, random, os, concurrent.futures
 
 try:
     from playwright.async_api import async_playwright
@@ -109,62 +109,87 @@ def clean_website_url(href):
     return href.split("?")[0].rstrip('/')
 
 
-CONTACT_PATHS = ["", "/contact", "/about", "/contact-us", "/about-us"]
+CONTACT_PATHS = ["", "/contact", "/about", "/contact-us", "/about-us", "/contactus", "/get-in-touch"]
+SKIP_EMAILS = {"admin@", "support@", "info@", "noreply@", "no-reply@", "hello@", "contact@", "mail@", "webmaster@", "enquiries@", "sales@", "orders@", "help@"}
 
 
-def fetch_website_data_fast(url, timeout=10):
+def extract_contacts_from_html(html):
+    emails = []
+    phones = []
+    html_lower = html.lower()
+    for e in extract_emails(html):
+        prefix = e.split('@')[0].lower() + '@'
+        skip = False
+        for s in SKIP_EMAILS:
+            if prefix.startswith(s) or prefix == s:
+                skip = True
+                break
+        if not skip and e not in emails:
+            emails.append(e)
+    for m in re.finditer(r'href=["\']mailto:([^"\']+)["\']', html, re.I):
+        e = m.group(1).split('?')[0].strip()
+        if e and '@' in e and e not in emails and len(e) < 100:
+            prefix = e.split('@')[0].lower() + '@'
+            skip = False
+            for s in SKIP_EMAILS:
+                if prefix.startswith(s) or prefix == s:
+                    skip = True
+                    break
+            if not skip:
+                emails.append(e)
+    for ph in extract_phones(html):
+        if ph not in phones:
+            phones.append(ph)
+    return emails, phones
+
+
+def fetch_single_page(target, timeout):
+    if Fetcher:
+        try:
+            resp = Fetcher.get(target, impersonate='chrome', timeout=timeout, follow_redirects=True)
+            html = resp.body.decode('utf-8', errors='ignore')
+            return extract_contacts_from_html(html)
+        except:
+            pass
+    try:
+        import urllib.request, ssl
+        ctx = ssl._create_unverified_context()
+        req = urllib.request.Request(
+            target,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+        )
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            html = resp.read().decode('utf-8', errors='ignore')
+        return extract_contacts_from_html(html)
+    except:
+        pass
+    return [], []
+
+
+def fetch_website_data_fast(url, timeout=15):
     emails = []
     phones = []
     try:
         parsed = urllib.parse.urlparse(url.rstrip('/'))
         base_domain = f"{parsed.scheme}://{parsed.netloc}"
-        for path in CONTACT_PATHS:
-            if len(emails) >= 3:
-                break
-            target = url if not path else base_domain + path
-            if Fetcher:
-                try:
-                    p = Fetcher.get(target, impersonate='chrome', timeout=timeout)
-                    text = p.text
-                    for e in extract_emails(text):
-                        if e not in emails:
-                            emails.append(e)
-                    html = text
-                    for m in re.finditer(r'href=["\']mailto:([^"\']+)["\']', html, re.I):
-                        e = m.group(1).split('?')[0].strip()
-                        if e and '@' in e and e not in emails and len(e) < 100:
-                            emails.append(e)
-                    for ph in extract_phones(text):
-                        if ph not in phones:
-                            phones.append(ph)
-                except:
-                    pass
-            else:
-                try:
-                    import urllib.request, ssl
-                    ctx = ssl._create_unverified_context()
-                    req = urllib.request.Request(
-                        target,
-                        headers={
-                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                            "Accept": "text/html,application/xhtml+xml",
-                            "Accept-Language": "en-US,en;q=0.9",
-                        }
-                    )
-                    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-                        html = resp.read().decode('utf-8', errors='ignore')
-                    for e in extract_emails(html):
-                        if e not in emails:
-                            emails.append(e)
-                    for m in re.finditer(r'href=["\']mailto:([^"\']+)["\']', html, re.I):
-                        e = m.group(1).split('?')[0].strip()
-                        if e and '@' in e and e not in emails and len(e) < 100:
-                            emails.append(e)
-                    for ph in extract_phones(html):
-                        if ph not in phones:
-                            phones.append(ph)
-                except:
-                    pass
+
+        targets = [url if not p else base_domain + p for p in CONTACT_PATHS]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {pool.submit(fetch_single_page, t, timeout): t for t in targets}
+            for future in concurrent.futures.as_completed(futures):
+                if len(emails) >= 5:
+                    break
+                page_emails, page_phones = future.result()
+                for e in page_emails:
+                    if e not in emails:
+                        emails.append(e)
+                for p in page_phones:
+                    if p not in phones:
+                        phones.append(p)
     except:
         pass
     return phones[:3], emails[:5]
