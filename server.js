@@ -58,12 +58,18 @@ try {
     console.error('Python dep install failed:', e.message);
   }
 }
-// Always ensure Python Playwright browsers are installed (handles version mismatch with npx)
+// Ensure Python Playwright browsers match the installed Python version
 try {
-  execSync('python3 -m playwright install chromium 2>&1', { stdio: 'inherit', timeout: 180000 });
-  console.log('Python Playwright browsers OK');
+  execSync('python3 -m playwright install chromium-headless-shell --force 2>&1', { stdio: 'inherit', timeout: 300000 });
+  console.log('Python Playwright chromium-headless-shell OK');
 } catch (e) {
-  console.error('Python Playwright browser install failed:', e.message);
+  console.error('Python headless-shell install failed:', e.message);
+  try {
+    execSync('python3 -m playwright install chromium --force 2>&1', { stdio: 'inherit', timeout: 300000 });
+    console.log('Python Playwright chromium OK');
+  } catch (e2) {
+    console.error('Python Playwright chromium install failed:', e2.message);
+  }
 }
 
 const app = express();
