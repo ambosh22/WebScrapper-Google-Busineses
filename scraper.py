@@ -8,9 +8,12 @@ except ImportError:
     sys.exit(1)
 
 try:
-    from scrapling.fetchers import Fetcher
+    from scrapling.fetchers import Fetcher, AsyncFetcher
+    HAS_ASYNC_FETCHER = True
 except ImportError:
     Fetcher = None
+    AsyncFetcher = None
+    HAS_ASYNC_FETCHER = False
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -170,26 +173,39 @@ def fetch_single_page(target, timeout):
     return [], []
 
 
-def fetch_website_data_fast(url, timeout=15):
+async def fetch_website_data_fast(url, timeout=15):
     emails = []
     phones = []
     try:
         parsed = urllib.parse.urlparse(url.rstrip('/'))
         base_domain = f"{parsed.scheme}://{parsed.netloc}"
-
         targets = [url if not p else base_domain + p for p in CONTACT_PATHS]
-        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
-            futures = {pool.submit(fetch_single_page, t, timeout): t for t in targets}
-            for future in concurrent.futures.as_completed(futures):
-                if len(emails) >= 5:
-                    break
-                page_emails, page_phones = future.result()
-                for e in page_emails:
-                    if e not in emails:
-                        emails.append(e)
-                for p in page_phones:
-                    if p not in phones:
-                        phones.append(p)
+
+        if HAS_ASYNC_FETCHER:
+            async def fetch_one(target):
+                try:
+                    resp = await AsyncFetcher.get(target, timeout=timeout, retries=1)
+                    if resp and resp.status == 200:
+                        return extract_contacts_from_html(resp.body.decode('utf-8', errors='ignore'))
+                except:
+                    pass
+                return [], []
+            results = await asyncio.gather(*[fetch_one(t) for t in targets], return_exceptions=True)
+            valid = [r for r in results if isinstance(r, tuple)]
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+                futures = {pool.submit(fetch_single_page, t, timeout): t for t in targets}
+                valid = [future.result() for future in concurrent.futures.as_completed(futures)]
+
+        for page_emails, page_phones in valid:
+            if len(emails) >= 5:
+                break
+            for e in page_emails:
+                if e not in emails:
+                    emails.append(e)
+            for p in page_phones:
+                if p not in phones:
+                    phones.append(p)
     except:
         pass
     return phones[:3], emails[:5]
@@ -335,7 +351,7 @@ async def scrape_city(browser, city, state, niche="businesses", max_count=999, m
 
                 if website and website.startswith("http") and len(emails) < 3:
                     try:
-                        sp, se = fetch_website_data_fast(website)
+                        sp, se = await fetch_website_data_fast(website)
                         for e in se:
                             if e.lower() not in [x.lower() for x in emails]:
                                 emails.append(e)
@@ -384,7 +400,7 @@ async def main():
     cities = [c.strip() for c in args.cities.split(",") if c.strip()]
     total = len(cities)
 
-    scrapling_status = "with Scrapling" if Fetcher else "without Scrapling (no email extraction)"
+    scrapling_status = "with AsyncFetcher" if HAS_ASYNC_FETCHER else "with sync Fetcher" if Fetcher else "without Scrapling (no email extraction)"
     log(f"Scraping {args.state} for '{args.niche}' ({total} cities, max {args.max_total} total, {args.parallel_cities}x parallel, {scrapling_status})", "info")
     start_time = time.time()
     all_results = []
