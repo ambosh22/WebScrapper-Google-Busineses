@@ -241,7 +241,16 @@ async def scrape_city(browser, city, state, niche="businesses", max_count=999, m
     try:
         query = urllib.parse.quote(niche.replace(" ", "+"))
         search_url = f"https://www.google.com/maps/search/{query}+in+{city},+{state}/"
-        await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+        for attempt in range(3):
+            try:
+                await page.goto(search_url, wait_until="load", timeout=90000)
+                break
+            except:
+                if attempt < 2:
+                    log(f"Retry {attempt+1} for {city}", "info")
+                    await rand_sleep(2, 4)
+                else:
+                    raise
         await rand_sleep(1.5, 2.5)
 
         try:
@@ -428,6 +437,9 @@ async def main():
                 "--disable-gpu", "--no-zygote",
                 "--disable-blink-features=AutomationControlled",
                 "--window-size=1920,1080",
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--disable-web-security",
+                "--disable-features=BlockInsecurePrivateNetworkRequests",
             ]
         )
 
