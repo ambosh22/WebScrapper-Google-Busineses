@@ -3,22 +3,12 @@ import sys, json, re, asyncio, argparse, time, urllib.parse, random, os, concurr
 
 import subprocess
 
-IMPORT_SOURCE = "playwright"
-
 try:
-    from rebrowser_playwright.async_api import async_playwright
-    IMPORT_SOURCE = "rebrowser_playwright"
+    from playwright.async_api import async_playwright
 except ImportError:
-    try:
-        from playwright.async_api import async_playwright
-    except ImportError:
-        print(json.dumps({"type": "status", "message": "Installing rebrowser-playwright..."}), file=sys.stderr)
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "rebrowser-playwright>=1.52.0"])
-        try:
-            from rebrowser_playwright.async_api import async_playwright
-            IMPORT_SOURCE = "rebrowser_playwright"
-        except ImportError:
-            from playwright.async_api import async_playwright
+    print(json.dumps({"type": "status", "message": "Installing playwright..."}), file=sys.stderr)
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright>=1.40.0"])
+    from playwright.async_api import async_playwright
 
 try:
     from scrapling.fetchers import Fetcher, AsyncFetcher
@@ -33,8 +23,6 @@ try:
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300000)
 except:
     pass
-
-PROXY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxies.txt")
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -74,38 +62,6 @@ async def rand_sleep(min_s=0.2, max_s=0.6):
 
 def log(msg, type="info"):
     print(json.dumps({"type": type, "message": msg}), file=sys.stderr, flush=True)
-
-
-def load_proxies():
-    proxies = []
-    try:
-        if os.path.exists(PROXY_FILE):
-            with open(PROXY_FILE, "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        proxies.append(line)
-        log(f"Loaded {len(proxies)} proxies from proxies.txt", "info")
-    except Exception as e:
-        log(f"Failed to load proxies: {e}", "error")
-    return proxies
-
-PROXIES = load_proxies()
-
-def pick_proxy():
-    if not PROXIES:
-        return None
-    proxy_str = random.choice(PROXIES)
-    parsed = urllib.parse.urlparse(proxy_str)
-    result = {"server": proxy_str}
-    if parsed.username and parsed.password:
-        result["username"] = parsed.username
-        result["password"] = parsed.password
-    elif "@" in proxy_str and "://" in proxy_str:
-        userinfo, server = proxy_str.split("://")[1].split("@", 1)
-        if ":" in userinfo:
-            result = {"server": f"{parsed.scheme}://{server}", "username": userinfo.split(":")[0], "password": ":".join(userinfo.split(":")[1:])}
-    return result
 
 
 def extract_phones(text):
@@ -267,19 +223,16 @@ async def fetch_website_data_fast(url, timeout=15):
     return phones[:3], emails[:5]
 
 
-async def scrape_city(browser, city, state, niche="businesses", max_count=999, max_total=1000, current_total=0, seen_phones=None, seen_name_city=None, proxy=None):
+async def scrape_city(browser, city, state, niche="businesses", max_count=999, max_total=1000, current_total=0, seen_phones=None, seen_name_city=None):
     if seen_phones is None:
         seen_phones = set()
     if seen_name_city is None:
         seen_name_city = set()
 
-    ctx_kwargs = {
-        "user_agent": random.choice(USER_AGENTS),
-        "viewport": random.choice(VIEWPORTS),
-    }
-    if proxy:
-        ctx_kwargs["proxy"] = proxy
-    ctx = await browser.new_context(**ctx_kwargs)
+    ctx = await browser.new_context(
+        user_agent=random.choice(USER_AGENTS),
+        viewport=random.choice(VIEWPORTS),
+    )
     page = await ctx.new_page()
     results = []
 
@@ -463,22 +416,13 @@ async def main():
     parser.add_argument("--max", type=int, default=200)
     parser.add_argument("--max-total", type=int, default=1000)
     parser.add_argument("--parallel-cities", type=int, default=3)
-    parser.add_argument("--proxy", type=str, default="", help="Direct proxy URL (e.g. http://user:pass@host:port)")
     args = parser.parse_args()
-
-    if args.proxy:
-        parsed = urllib.parse.urlparse(args.proxy)
-        PROXIES.insert(0, args.proxy)
-        log(f"Using direct proxy: {parsed.hostname}:{parsed.port}", "info")
 
     cities = [c.strip() for c in args.cities.split(",") if c.strip()]
     total = len(cities)
 
-    pw_source = f"via {IMPORT_SOURCE}"
-    proxy_count = len(PROXIES)
-    proxy_status = f"{proxy_count} proxies" if proxy_count > 0 else "no proxies"
     scrapling_status = "with AsyncFetcher" if HAS_ASYNC_FETCHER else "with sync Fetcher" if Fetcher else "without Scrapling (no email extraction)"
-    log(f"Scraping {args.state} for '{args.niche}' ({total} cities, max {args.max_total} total, {args.parallel_cities}x parallel, {pw_source}, {proxy_status}, {scrapling_status})", "info")
+    log(f"Scraping {args.state} for '{args.niche}' ({total} cities, max {args.max_total} total, {args.parallel_cities}x parallel, {scrapling_status})", "info")
     start_time = time.time()
     all_results = []
     seen_phones = set()
@@ -505,15 +449,13 @@ async def main():
             batch = cities[batch_start:batch_start + args.parallel_cities]
 
             async def scrape_one(city):
-                proxy = pick_proxy() if PROXIES else None
                 results = await scrape_city(browser, city, args.state,
                                             niche=args.niche,
                                             max_count=args.max,
                                             max_total=args.max_total,
                                             current_total=total_count,
                                             seen_phones=seen_phones,
-                                            seen_name_city=seen_name_city,
-                                            proxy=proxy)
+                                            seen_name_city=seen_name_city)
                 return city, results
 
             batch_results = await asyncio.gather(*[scrape_one(c) for c in batch])
