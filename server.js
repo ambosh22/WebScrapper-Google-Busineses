@@ -94,10 +94,12 @@ app.use(express.static('public', { maxAge: 0 }));
 const PORT = process.env.PORT || 3000;
 
 app.get('/health', (req, res) => {
+  const proxy = getProxyArg();
   res.json({
     status: 'ok',
     playwright: PW_BROWSERS_READY,
     mongodb: mongoose.connection.readyState === 1,
+    proxy: !!proxy,
     jobsDir: JOBS_DIR,
     uptime: process.uptime()
   });
@@ -426,11 +428,25 @@ function logEntry(jobId, message, type = 'info') {
   }
 }
 
+function getProxyArg() {
+  const proxy = process.env.SCRAPER_PROXY;
+  if (proxy && proxy.trim()) return proxy.trim();
+  try {
+    const proxyFile = path.join(__dirname, 'proxies.txt');
+    if (fs.existsSync(proxyFile)) {
+      const lines = fs.readFileSync(proxyFile, 'utf-8').split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+      if (lines.length > 0) return lines[0];
+    }
+  } catch {}
+  return null;
+}
+
 function runScraperProcess(state, cities, niche, maxPerCity, jobId, maxTotal = 1000) {
   return new Promise((resolve, reject) => {
     const pythonScript = path.join(__dirname, 'scraper.py');
     const citiesStr = cities.join(',');
-    const proc = spawn('python3', [
+    const proxy = getProxyArg();
+    const args = [
       pythonScript,
       '--state', state,
       '--cities', citiesStr,
@@ -438,7 +454,12 @@ function runScraperProcess(state, cities, niche, maxPerCity, jobId, maxTotal = 1
       '--max', String(maxPerCity),
       '--max-total', String(maxTotal),
       '--parallel-cities', '3',
-    ], {
+    ];
+    if (proxy) {
+      args.push('--proxy', proxy);
+      console.log(`Using proxy: ${proxy.replace(/:(\w+)@/, ':***@')}`);
+    }
+    const proc = spawn('python3', args, {
       env: { ...process.env, PYTHONUNBUFFERED: '1' },
     });
 

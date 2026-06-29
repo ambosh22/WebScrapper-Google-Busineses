@@ -1,9 +1,23 @@
 # Proxy List — one proxy per line
-# If empty/file missing, free proxies will be auto-fetched from public lists
+#
+# Google Maps blocks datacenter IPs (like Render's). To scrape successfully,
+# you MUST use residential or mobile proxies.
 #
 # Formats supported:
 #   http://user:pass@host:port
 #   http://host:port
 #   socks5://user:pass@host:port
+#   socks5://host:port
 #
-# Add your own proxies below (these will be used instead of free ones):
+# Recommended proxy providers:
+#   - BrightData (residential)
+#   - Oxylabs (residential)
+#   - SmartProxy (residential)
+#   - IPRoyal (residential)
+#
+# You can also set the SCRAPER_PROXY env var on Render instead of this file.
+#
+# Examples (replace with your actual proxies):
+# http://user:pass@1.2.3.4:8080
+# http://1.2.3.4:3128
+# socks5://user:pass@5.6.7.8:1080
