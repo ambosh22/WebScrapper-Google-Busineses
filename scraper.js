@@ -168,12 +168,19 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
     const searchUrl = `https://www.google.com/maps/search/${query}+in+${city},+${state}/`;
 
     if (onProgress) onProgress('status', { message: `Searching Maps for ${city}...` });
+
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+    });
+
     try {
       await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
     } catch {
       await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
     }
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(2000);
 
     let cards = page.locator('[class*="Nv2PK"]');
     let cardCount = 0;
@@ -359,13 +366,15 @@ async function runScraper({ state, cities, niche, maxPerCity, maxTotal, onProgre
   try {
     browser = await chromium.launch({
       headless: true,
-      timeout: 30000,
+      timeout: 60000,
       args: [
         '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
         '--disable-gpu', '--no-zygote',
         '--disable-accelerated-2d-canvas', '--disable-accelerated-video-decode',
         '--js-flags=--max_old_space_size=256',
         '--disable-web-security',
+        '--disable-blink-features=AutomationControlled',
+        '--window-size=1920,1080',
       ],
     });
   } catch (err) {
