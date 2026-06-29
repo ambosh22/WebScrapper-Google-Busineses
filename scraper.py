@@ -28,11 +28,15 @@ except ImportError:
     AsyncFetcher = None
     HAS_ASYNC_FETCHER = False
 
+PW_INSTALL_MODULE = "rebrowser_playwright" if IMPORT_SOURCE == "rebrowser_playwright" else "playwright"
 try:
-    subprocess.check_call([sys.executable, "-m", "playwright", "install", "--force", "chromium", "chromium-headless-shell"],
+    subprocess.check_call([sys.executable, "-m", PW_INSTALL_MODULE, "install", "--force", "chromium", "chromium-headless-shell"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300000)
-except:
-    pass
+    msg = json.dumps({"type": "info", "message": f"Browsers installed via {PW_INSTALL_MODULE}"})
+    print(msg, file=sys.stderr, flush=True)
+except Exception as e:
+    msg = json.dumps({"type": "info", "message": f"Browser install warning: {e}"})
+    print(msg, file=sys.stderr, flush=True)
 
 PROXY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxies.txt")
 
