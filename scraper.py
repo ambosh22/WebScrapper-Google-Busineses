@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import sys, json, re, asyncio, argparse, time, urllib.parse, random, os, urllib.request, ssl
+import sys, json, re, asyncio, argparse, time, urllib.parse, random, os
 
 try:
     from playwright.async_api import async_playwright
@@ -7,29 +7,44 @@ except ImportError:
     print("Install: pip install playwright && playwright install chromium", file=sys.stderr)
     sys.exit(1)
 
+try:
+    from scrapling.fetchers import Fetcher
+except ImportError:
+    Fetcher = None
+
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
 ]
 
 VIEWPORTS = [
     {"width": 1920, "height": 1080},
-    {"width": 1920, "height": 1040},
     {"width": 1366, "height": 768},
     {"width": 1440, "height": 900},
-    {"width": 1536, "height": 864},
-    {"width": 1280, "height": 800},
 ]
 
-PROXIES = []
-PROXY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxies.txt")
+STEALTH_SCRIPT = """
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+// Override chrome runtime
+window.chrome = { runtime: {} };
+// Remove headless flags
+const originalQuery = window.navigator.permissions.query;
+window.navigator.permissions.query = (parameters) => (
+  parameters.name === 'notifications' ?
+    Promise.resolve({ state: Notification.permission }) :
+    originalQuery(parameters)
+);
+"""
 
 
-async def rand_sleep(min_s=0.3, max_s=1.2):
+async def rand_sleep(min_s=0.2, max_s=0.6):
     await asyncio.sleep(random.uniform(min_s, max_s))
 
 
@@ -57,9 +72,15 @@ def extract_emails(text):
     emails, seen = [], set()
     for m in re.findall(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', text):
         ml = m.lower()
-        if ml not in seen and not ml.endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.css', '.js')):
+        if ml not in seen and not re.search(r'\.(png|jpg|jpeg|gif|svg|css|js)$', ml):
             seen.add(ml)
             emails.append(m)
+    obf_pat = re.compile(r'([a-zA-Z0-9._%+-]+)\s*(?:\[?@\]?|\[?at\]?|\(?at\)?)\s*([a-zA-Z0-9.-]+)\s*(?:\[?dot\]?|\[?\.\]?|\(?dot\)?)\s*([a-zA-Z]{2,})', re.I)
+    for om in obf_pat.finditer(text):
+        em = f"{om.group(1)}@{om.group(2)}.{om.group(3)}".lower()
+        if em not in seen and not re.search(r'\.(png|jpg|jpeg|gif|svg|css|js)$', em):
+            seen.add(em)
+            emails.append(em)
     return emails
 
 
@@ -88,101 +109,65 @@ def clean_website_url(href):
     return href.split("?")[0].rstrip('/')
 
 
-FREE_PROXY_URLS = [
-    "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
-    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
-    "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt",
-    "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",
-]
+CONTACT_PATHS = ["", "/contact", "/about", "/contact-us", "/about-us"]
 
 
-def fetch_free_proxies():
-    proxies = set()
-    ctx = ssl._create_unverified_context()
-    for url in FREE_PROXY_URLS:
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}, method="GET")
-            with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-                raw = resp.read().decode("utf-8")
-                for line in raw.splitlines():
-                    line = line.strip().lower()
-                    if line and ":" in line and not line.startswith("#"):
-                        proxies.add(f"http://{line}")
-            log(f"Fetched proxies from {url.split('/')[2]}", "info")
-        except Exception as e:
-            log(f"Failed to fetch {url.split('/')[2]}: {str(e)[:50]}", "error")
-    return list(proxies)
-
-
-def load_proxies():
-    if os.path.exists(PROXY_FILE):
-        proxies = []
-        with open(PROXY_FILE) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    proxies.append(line)
-        if proxies:
-            log(f"Loaded {len(proxies)} proxies from proxies.txt", "info")
-            return proxies
-
-    log("No proxies configured — running direct connections", "info")
-    return []
-
-PROXIES[:] = load_proxies()
-
-
-def get_proxy():
-    if PROXIES:
-        return random.choice(PROXIES)
-    return None
-
-
-def get_context_kwargs():
-    ua = random.choice(USER_AGENTS)
-    vp = random.choice(VIEWPORTS)
-    kwargs = {"user_agent": ua, "viewport": vp}
-    proxy = get_proxy()
-    if proxy:
-        kwargs["proxy"] = {"server": proxy}
-    return kwargs
-
-
-CONTACT_PATHS = ["", "/contact", "/contact-us", "/about", "/about-us", "/contactus", "/get-in-touch"]
-
-
-async def fetch_website_data(ctx, url):
-    page = await ctx.new_page()
-    phones, emails = [], set()
+def fetch_website_data_fast(url, timeout=10):
+    emails = []
+    phones = []
     try:
         parsed = urllib.parse.urlparse(url.rstrip('/'))
         base_domain = f"{parsed.scheme}://{parsed.netloc}"
-
         for path in CONTACT_PATHS:
-            try:
-                target = url if not path else base_domain + path
-                await page.goto(target, wait_until="load", timeout=15000)
-                await rand_sleep(0.5, 1.0)
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await rand_sleep(0.3, 0.6)
-                text = await page.inner_text("body")
-                for p in extract_phones(text):
-                    if p not in phones:
-                        phones.append(p)
-                for e in extract_emails(text):
-                    emails.add(e)
-                for el in await page.locator('a[href^="mailto:"]').all():
-                    href = await el.get_attribute("href")
-                    if href:
-                        e = href.replace("mailto:", "").split("?")[0].strip()
-                        if e and "@" in e:
-                            emails.add(e)
-            except:
-                pass
+            if len(emails) >= 3:
+                break
+            target = url if not path else base_domain + path
+            if Fetcher:
+                try:
+                    p = Fetcher.get(target, impersonate='chrome', timeout=timeout)
+                    text = p.text
+                    for e in extract_emails(text):
+                        if e not in emails:
+                            emails.append(e)
+                    html = text
+                    for m in re.finditer(r'href=["\']mailto:([^"\']+)["\']', html, re.I):
+                        e = m.group(1).split('?')[0].strip()
+                        if e and '@' in e and e not in emails and len(e) < 100:
+                            emails.append(e)
+                    for ph in extract_phones(text):
+                        if ph not in phones:
+                            phones.append(ph)
+                except:
+                    pass
+            else:
+                try:
+                    import urllib.request, ssl
+                    ctx = ssl._create_unverified_context()
+                    req = urllib.request.Request(
+                        target,
+                        headers={
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            "Accept": "text/html,application/xhtml+xml",
+                            "Accept-Language": "en-US,en;q=0.9",
+                        }
+                    )
+                    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                        html = resp.read().decode('utf-8', errors='ignore')
+                    for e in extract_emails(html):
+                        if e not in emails:
+                            emails.append(e)
+                    for m in re.finditer(r'href=["\']mailto:([^"\']+)["\']', html, re.I):
+                        e = m.group(1).split('?')[0].strip()
+                        if e and '@' in e and e not in emails and len(e) < 100:
+                            emails.append(e)
+                    for ph in extract_phones(html):
+                        if ph not in phones:
+                            phones.append(ph)
+                except:
+                    pass
     except:
         pass
-    await page.close()
-    return phones[:4], list(emails)[:5]
+    return phones[:3], emails[:5]
 
 
 async def scrape_city(browser, city, state, niche="businesses", max_count=999, max_total=1000, current_total=0, seen_phones=None, seen_name_city=None):
@@ -191,14 +176,20 @@ async def scrape_city(browser, city, state, niche="businesses", max_count=999, m
     if seen_name_city is None:
         seen_name_city = set()
 
-    ctx = await browser.new_context(**get_context_kwargs())
+    ctx = await browser.new_context(
+        user_agent=random.choice(USER_AGENTS),
+        viewport=random.choice(VIEWPORTS),
+    )
     page = await ctx.new_page()
     results = []
+
+    await page.add_init_script(STEALTH_SCRIPT)
+
     try:
         query = urllib.parse.quote(niche.replace(" ", "+"))
         search_url = f"https://www.google.com/maps/search/{query}+in+{city},+{state}/"
         await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-        await rand_sleep(1.5, 3.0)
+        await rand_sleep(1.5, 2.5)
 
         try:
             await page.wait_for_selector('[class*="Nv2PK"]', timeout=15000)
@@ -208,30 +199,29 @@ async def scrape_city(browser, city, state, niche="businesses", max_count=999, m
 
         prev_count = 0
         no_progress = 0
-        for _ in range(20):
+        for _ in range(15):
             try:
-                await page.evaluate('document.querySelector("[role=feed]")?.scrollBy(0, 1800)')
+                await page.evaluate('document.querySelector("[role=feed]")?.scrollBy(0, 2000)')
             except:
                 pass
-            await rand_sleep(0.4, 0.9)
+            await rand_sleep()
             cards = page.locator('[class*="Nv2PK"]')
             cur = await cards.count()
             if cur == prev_count:
                 no_progress += 1
-                if no_progress >= 4:
+                if no_progress >= 3:
                     break
             else:
                 no_progress = 0
             prev_count = cur
 
-        await rand_sleep(0.8, 1.5)
+        await rand_sleep(0.5, 1.0)
 
         cards = page.locator('[class*="Nv2PK"]')
         total = await cards.count()
         limit = min(total, max_count, max_total - current_total)
         if limit <= 0:
             return results
-        log(f"Found {limit} businesses in {city}", "info")
 
         for i in range(limit):
             try:
@@ -263,9 +253,7 @@ async def scrape_city(browser, city, state, niche="businesses", max_count=999, m
 
                 name_city_key = (name.lower().strip(), city.lower().strip())
 
-                is_dup = (phone_key and phone_key in seen_phones) or (name_city_key in seen_name_city)
-                if is_dup:
-                    log(f"  [{i+1}/{limit}] Skipped duplicate: {name}", "info")
+                if (phone_key and phone_key in seen_phones) or (name_city_key in seen_name_city):
                     continue
 
                 if phone_key:
@@ -273,13 +261,13 @@ async def scrape_city(browser, city, state, niche="businesses", max_count=999, m
                 seen_name_city.add(name_city_key)
 
                 await cards.nth(i).click()
-                await rand_sleep(0.6, 1.5)
+                await rand_sleep(0.3, 0.5)
 
                 emails = []
                 website = ""
                 try:
                     await page.keyboard.press("Escape")
-                    await rand_sleep(0.2, 0.5)
+                    await rand_sleep(0.1, 0.2)
                     body_text = await page.inner_text("body")
 
                     for e in extract_emails(body_text):
@@ -320,9 +308,9 @@ async def scrape_city(browser, city, state, niche="businesses", max_count=999, m
                     except:
                         pass
 
-                if website and website.startswith("http"):
+                if website and website.startswith("http") and len(emails) < 3:
                     try:
-                        sp, se = await fetch_website_data(ctx, website)
+                        sp, se = fetch_website_data_fast(website)
                         for e in se:
                             if e.lower() not in [x.lower() for x in emails]:
                                 emails.append(e)
@@ -339,19 +327,16 @@ async def scrape_city(browser, city, state, niche="businesses", max_count=999, m
                     "email1": emails[0] if len(emails) > 0 else "",
                     "email2": emails[1] if len(emails) > 1 else "",
                     "email3": emails[2] if len(emails) > 2 else "",
-                    "email4": emails[3] if len(emails) > 3 else "",
-                    "email5": emails[4] if len(emails) > 4 else "",
                     "phone1": phones_fmt[0] if len(phones_fmt) > 0 else "",
                     "phone2": phones_fmt[1] if len(phones_fmt) > 1 else "",
+                    "phone3": phones_fmt[2] if len(phones_fmt) > 2 else "",
                     "website": website
                 }
                 results.append(entry)
                 print(json.dumps({"type": "business", "entry": entry}), file=sys.stderr, flush=True)
-                log(f"  [{i+1}/{limit}] {name} - e:{entry['email1'] or 'no'} p:{entry['phone1'] or 'no'}", "success")
-                await rand_sleep(0.2, 0.6)
 
-            except Exception as e:
-                log(f"  [{i+1}] Error: {str(e)[:80]}", "error")
+            except:
+                pass
 
     except Exception as e:
         log(f"City error {city}: {e}", "error")
@@ -374,8 +359,8 @@ async def main():
     cities = [c.strip() for c in args.cities.split(",") if c.strip()]
     total = len(cities)
 
-    proxy_status = f"{len(PROXIES)} proxies" if PROXIES else "no proxies (direct)"
-    log(f"Scraping {args.state} for '{args.niche}' ({total} cities, max {args.max_total} total, {args.parallel_cities}x parallel, {proxy_status})", "info")
+    scrapling_status = "with Scrapling" if Fetcher else "without Scrapling (no email extraction)"
+    log(f"Scraping {args.state} for '{args.niche}' ({total} cities, max {args.max_total} total, {args.parallel_cities}x parallel, {scrapling_status})", "info")
     start_time = time.time()
     all_results = []
     seen_phones = set()
@@ -385,8 +370,12 @@ async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
-                  "--disable-web-security", "--window-size=1920,1080"]
+            args=[
+                "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
+                "--disable-gpu", "--no-zygote",
+                "--disable-blink-features=AutomationControlled",
+                "--window-size=1920,1080",
+            ]
         )
 
         for batch_start in range(0, len(cities), args.parallel_cities):
@@ -419,7 +408,6 @@ async def main():
                 }
                 print(json.dumps(progress), file=sys.stderr, flush=True)
                 if total_count >= args.max_total:
-                    log(f"Reached max total of {args.max_total} businesses, stopping.", "info")
                     break
 
         await browser.close()

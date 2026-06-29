@@ -10,7 +10,7 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const User = require('./models/User');
-const { runScraper } = require('./scraper');
+const { spawn } = require('child_process');
 const { execSync } = require('child_process');
 
 const PW_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(os.homedir(), '.cache', 'ms-playwright');
@@ -413,26 +413,65 @@ function logEntry(jobId, message, type = 'info') {
 
 function runScraperProcess(state, cities, niche, maxPerCity, jobId, maxTotal = 1000) {
   return new Promise((resolve, reject) => {
-    runScraper({ state, cities, niche, maxPerCity, maxTotal, onProgress: (type, data) => {
-      if (!jobs[jobId]) return;
-      if (type === 'business' && data.entry) {
-        jobs[jobId].data.push(data.entry);
-      } else if (type === 'progress') {
-        jobs[jobId].totalBusinesses = data.totalBusinesses || 0;
-        jobs[jobId].progress = data.percent || 0;
-        jobs[jobId].elapsedSecs = data.elapsedSecs || 0;
-        if (data.city) jobs[jobId].completedCities = cities.indexOf(data.city) + 1;
-      } else if (type === 'status' && data.message) {
-        logEntry(jobId, data.message, 'info');
-      } else if (type === 'error' && data.message) {
-        logEntry(jobId, data.message, 'error');
+    const pythonScript = path.join(__dirname, 'scraper.py');
+    const citiesStr = cities.join(',');
+    const proc = spawn('python3', [
+      pythonScript,
+      '--state', state,
+      '--cities', citiesStr,
+      '--niche', niche,
+      '--max', String(maxPerCity),
+      '--max-total', String(maxTotal),
+      '--parallel-cities', '3',
+    ], {
+      env: { ...process.env, PYTHONUNBUFFERED: '1' },
+    });
+
+    let stdoutData = '';
+
+    proc.stdout.on('data', (chunk) => {
+      stdoutData += chunk.toString();
+    });
+
+    proc.stderr.on('data', (chunk) => {
+      const lines = chunk.toString().split('\n').filter(Boolean);
+      for (const line of lines) {
+        try {
+          const data = JSON.parse(line);
+          if (data.type === 'business' && data.entry) {
+            if (jobs[jobId]) jobs[jobId].data.push(data.entry);
+          } else if (data.type === 'progress') {
+            if (jobs[jobId]) {
+              jobs[jobId].totalBusinesses = data.total_businesses || 0;
+              jobs[jobId].progress = data.percent || 0;
+              jobs[jobId].elapsedSecs = data.elapsed_secs || 0;
+              if (data.city) jobs[jobId].completedCities = cities.indexOf(data.city) + 1;
+            }
+          } else if (data.type === 'status' || data.type === 'info') {
+            logEntry(jobId, data.message, 'info');
+          } else if (data.type === 'error') {
+            logEntry(jobId, data.message, 'error');
+          } else if (data.type === 'success') {
+            logEntry(jobId, data.message, 'success');
+          }
+        } catch {}
       }
-    }})
-      .then(data => resolve({ data }))
-      .catch(err => {
-        if (jobs[jobId]) jobs[jobId].status = 'error';
-        reject(err);
-      });
+    });
+
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`Scraper exited with code ${code}`));
+        return;
+      }
+      try {
+        const result = JSON.parse(stdoutData.trim());
+        resolve({ data: result });
+      } catch (err) {
+        reject(new Error(`Failed to parse scraper output: ${err.message}`));
+      }
+    });
+
+    proc.on('error', reject);
   });
 }
 
@@ -457,9 +496,6 @@ app.post('/api/scrape', requireAuth, checkScrapeLimit, async (req, res) => {
   const state = sanitize(req.body.state);
   const selectedCities = Array.isArray(req.body.cities) ? req.body.cities.map(sanitize).filter(Boolean) : [];
   const niche = sanitize(req.body.niche) || 'businesses';
-  if (!PW_BROWSERS_READY) {
-    return res.status(503).json({ error: 'Browser still downloading. Try again in 1-2 minutes.' });
-  }
   if (!state || !CITIES[state]) {
     return res.status(400).json({ error: 'Invalid state selected' });
   }
@@ -500,7 +536,7 @@ app.post('/api/scrape', requireAuth, checkScrapeLimit, async (req, res) => {
 
 async function scrapeRunner(userId, jobId, state, cities, niche = 'businesses') {
   try {
-    logEntry(jobId, `Launching Playwright scraper for '${niche}'...`, 'info');
+    logEntry(jobId, `Launching Python scraper (Scrapling) for '${niche}'...`, 'info');
 
     const result = await runScraperProcess(state, cities, niche, 200, jobId, 1000);
 
@@ -669,7 +705,7 @@ if (require.main === module) {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`Network access: http://0.0.0.0:${PORT}`);
-    console.log(`Scraper: ${path.join(__dirname, 'scraper.js')} (Node.js Playwright)`);
+    console.log(`Scraper: ${path.join(__dirname, 'scraper.py')} (Python Scrapling + Playwright)`);
   });
 }
 
