@@ -16,20 +16,33 @@ const { execSync } = require('child_process');
 const PW_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(os.homedir(), '.cache', 'ms-playwright');
 let PW_BROWSERS_READY = false;
 
-if (fs.existsSync(path.join(PW_BROWSERS_PATH, 'chromium_headless_shell-1228'))) {
+function findChromiumDir(basePath) {
+  try {
+    if (!fs.existsSync(basePath)) return null;
+    const entries = fs.readdirSync(basePath);
+    const found = entries.find(e => e.startsWith('chromium'));
+    return found ? path.join(basePath, found) : null;
+  } catch {
+    return null;
+  }
+}
+
+const chromiumDir = findChromiumDir(PW_BROWSERS_PATH);
+if (chromiumDir) {
+  console.log(`Playwright browsers found at ${chromiumDir}`);
   PW_BROWSERS_READY = true;
 } else {
-  console.log('Playwright browsers not found — installing asynchronously...');
-  const proc = require('child_process').exec(
-    `PLAYWRIGHT_BROWSERS_PATH=${PW_BROWSERS_PATH} node node_modules/playwright/cli.js install chromium-headless-shell`,
-    { timeout: 180000 },
-    (err) => {
-      if (err) console.error('Playwright install failed:', err.message);
-      else { console.log('Playwright browsers installed'); PW_BROWSERS_READY = true; }
-    }
-  );
-  proc.stdout?.pipe(process.stdout);
-  proc.stderr?.pipe(process.stderr);
+  console.log('Playwright browsers not found — installing synchronously...');
+  try {
+    execSync(
+      `PLAYWRIGHT_BROWSERS_PATH=${PW_BROWSERS_PATH} npx playwright install chromium-headless-shell`,
+      { stdio: 'inherit', timeout: 180000 }
+    );
+    console.log('Playwright browsers installed');
+    PW_BROWSERS_READY = true;
+  } catch (err) {
+    console.error('Playwright install failed:', err.message);
+  }
 }
 
 const app = express();
@@ -64,6 +77,16 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.static('public', { maxAge: 0 }));
 
 const PORT = process.env.PORT || 3000;
+
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    playwright: PW_BROWSERS_READY,
+    mongodb: mongoose.connection.readyState === 1,
+    jobsDir: JOBS_DIR,
+    uptime: process.uptime()
+  });
+});
 
 // --- MongoDB ---
 async function autoSeedAdmin() {
@@ -310,8 +333,18 @@ async function checkScrapeLimit(req, res, next) {
     next();
   } catch { res.status(500).json({ error: 'Server error' }); }
 }
-const JOBS_DIR = path.join(os.tmpdir(), 'web2-jobs');
+const JOBS_DIR = process.env.JOBS_DIR || path.join(os.tmpdir(), 'web2-jobs');
 if (!fs.existsSync(JOBS_DIR)) try { fs.mkdirSync(JOBS_DIR, { recursive: true }); } catch {}
+
+// Cleanup old jobs every 30 minutes
+setInterval(() => {
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  for (const [id, job] of Object.entries(jobs)) {
+    if (job.status !== 'running' && (job.startTime || 0) < cutoff) {
+      delete jobs[id];
+    }
+  }
+}, 30 * 60 * 1000);
 
 const CITIES = {
   "Alabama": ["Birmingham","Montgomery","Mobile","Huntsville","Tuscaloosa","Hoover","Auburn","Dothan","Madison","Decatur","Florence","Gadsden","Vestavia Hills","Prattville","Phenix City"],

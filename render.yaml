@@ -2,10 +2,15 @@ services:
   - type: web
     name: google-maps-scraper
     runtime: node
-    buildCommand: npm install && PLAYWRIGHT_BROWSERS_PATH=/opt/render/.cache/ms-playwright node node_modules/playwright/cli.js install chromium-headless-shell
+    buildCommand: npm install && npx playwright install chromium-headless-shell
     startCommand: node server.js
+    healthCheckPath: /health
     envVars:
       - key: NODE_VERSION
         value: "20"
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: /opt/render/.cache/ms-playwright
+      - key: MONGODB_URI
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
