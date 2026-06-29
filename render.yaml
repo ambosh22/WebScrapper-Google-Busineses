@@ -2,7 +2,7 @@ services:
   - type: web
     name: google-maps-scraper
     runtime: node
-    buildCommand: export PLAYWRIGHT_BROWSERS_PATH=/opt/render/.cache/ms-playwright && python3 -m pip install -r requirements.txt && npm install
+    buildCommand: export PLAYWRIGHT_BROWSERS_PATH=/opt/render/.cache/ms-playwright && python3 -m pip install -r requirements.txt && npm install && python3 -m rebrowser_playwright install chromium chromium-headless-shell
     startCommand: node server.js
     healthCheckPath: /health
     envVars:

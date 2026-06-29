@@ -28,14 +28,28 @@ except ImportError:
     AsyncFetcher = None
     HAS_ASYNC_FETCHER = False
 
+def check_browsers():
+    pw_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
+    if pw_path and os.path.isdir(pw_path):
+        for entry in os.listdir(pw_path):
+            if entry.startswith("chromium"):
+                return True
+    return False
+
 PW_INSTALL_MODULE = "rebrowser_playwright" if IMPORT_SOURCE == "rebrowser_playwright" else "playwright"
-try:
-    subprocess.check_call([sys.executable, "-m", PW_INSTALL_MODULE, "install", "--force", "chromium", "chromium-headless-shell"],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300000)
-    msg = json.dumps({"type": "info", "message": f"Browsers installed via {PW_INSTALL_MODULE}"})
+if not check_browsers():
+    msg = json.dumps({"type": "status", "message": f"Installing Chromium via {PW_INSTALL_MODULE}..."})
     print(msg, file=sys.stderr, flush=True)
-except Exception as e:
-    msg = json.dumps({"type": "info", "message": f"Browser install warning: {e}"})
+    try:
+        subprocess.check_call([sys.executable, "-m", PW_INSTALL_MODULE, "install", "chromium", "chromium-headless-shell"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300000)
+        msg = json.dumps({"type": "info", "message": f"Browsers installed via {PW_INSTALL_MODULE}"})
+        print(msg, file=sys.stderr, flush=True)
+    except Exception as e:
+        msg = json.dumps({"type": "info", "message": f"Browser install warning: {e}"})
+        print(msg, file=sys.stderr, flush=True)
+else:
+    msg = json.dumps({"type": "info", "message": f"Chromium already installed"})
     print(msg, file=sys.stderr, flush=True)
 
 PROXY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxies.txt")
