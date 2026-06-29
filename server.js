@@ -45,7 +45,7 @@ if (chromiumDir) {
   }
 }
 
-// Ensure Python deps and browsers are installed (using same python3 as runtime)
+// Ensure Python deps are installed
 try {
   execSync('python3 -c "import playwright; import scrapling"', { stdio: 'pipe', timeout: 10000 });
   console.log('Python deps OK');
@@ -58,19 +58,7 @@ try {
     console.error('Python dep install failed:', e.message);
   }
 }
-// Ensure Python Playwright browsers match the installed Python version
-try {
-  execSync('python3 -m playwright install chromium-headless-shell --force 2>&1', { stdio: 'inherit', timeout: 300000 });
-  console.log('Python Playwright chromium-headless-shell OK');
-} catch (e) {
-  console.error('Python headless-shell install failed:', e.message);
-  try {
-    execSync('python3 -m playwright install chromium --force 2>&1', { stdio: 'inherit', timeout: 300000 });
-    console.log('Python Playwright chromium OK');
-  } catch (e2) {
-    console.error('Python Playwright chromium install failed:', e2.message);
-  }
-}
+// Python Playwright browsers installed by scraper.py on first run
 
 const app = express();
 app.set('trust proxy', 1);

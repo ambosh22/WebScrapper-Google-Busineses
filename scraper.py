@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import sys, json, re, asyncio, argparse, time, urllib.parse, random, os, concurrent.futures
 
+import subprocess
+
 try:
     from playwright.async_api import async_playwright
 except ImportError:
-    print("Install: pip install playwright && playwright install chromium", file=sys.stderr)
-    sys.exit(1)
+    print(json.dumps({"type": "status", "message": "Installing playwright..."}), file=sys.stderr)
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright>=1.40.0"])
+    from playwright.async_api import async_playwright
 
 try:
     from scrapling.fetchers import Fetcher, AsyncFetcher
@@ -14,6 +17,12 @@ except ImportError:
     Fetcher = None
     AsyncFetcher = None
     HAS_ASYNC_FETCHER = False
+
+try:
+    subprocess.check_call([sys.executable, "-m", "playwright", "install", "--force", "chromium", "chromium-headless-shell"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300000)
+except:
+    pass
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
