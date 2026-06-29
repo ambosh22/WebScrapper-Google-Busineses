@@ -1,23 +1,4 @@
 const { chromium } = require('playwright');
-const path = require('path');
-const fs = require('fs');
-const crypto = require('crypto');
-const http = require('http');
-const https = require('https');
-const { URL } = require('url');
-
-function fetchUrl(url, timeout = 8000) {
-  return new Promise((resolve, reject) => {
-    const client = url.startsWith('https') ? https : http;
-    const req = client.get(url, { timeout, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' } }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => resolve(data));
-    });
-    req.on('error', reject);
-    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-  });
-}
 
 const USER_AGENTS = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -111,62 +92,71 @@ function createContext(browser) {
   });
 }
 
-async function fetchWebsiteData(ctx, url) {
-  const phones = [];
+async function scrapeWebsiteEmails(browser, url) {
   const emails = new Set();
+  const phones = [];
   try {
-    const parsed = new URL(url);
-    const base = `${parsed.protocol}//${parsed.host}`;
-    const paths = ['', '/contact', '/about', '/contact-us', '/about-us'];
+    const ctx = await browser.newContext({
+      userAgent: USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
+      viewport: { width: 1024, height: 768 },
+    });
+    const page = await ctx.newPage();
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await page.waitForTimeout(1500);
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+      await page.waitForTimeout(500);
 
-    for (const p of paths) {
-      if (emails.size >= 3) break;
-      const target = p ? base + p : url;
-      try {
-        const html = await fetchUrl(target);
-        const clean = html.replace(/<script[\s\S]*?<\/script>/gi, '')
-                          .replace(/<style[\s\S]*?<\/style>/gi, '')
-                          .replace(/<[^>]+>/g, ' ');
-        for (const em of extractEmails(html)) emails.add(em);
-        for (const em of extractEmails(clean)) emails.add(em);
-        const mailMatch = html.match(/href=["']mailto:([^"']+)["']/gi);
-        if (mailMatch) {
-          for (const m of mailMatch) {
-            const e = m.replace(/href=["']mailto:/i, '').replace(/["']/, '').split('?')[0].trim();
-            if (e && e.includes('@') && e.length < 100) emails.add(e);
-          }
+      const text = await page.evaluate(() => document.body.innerText || '');
+      const html = await page.evaluate(() => document.documentElement.outerHTML || '');
+
+      for (const e of extractEmails(text)) emails.add(e);
+      for (const e of extractEmails(html)) emails.add(e);
+
+      const mailtoLinks = await page.locator('a[href^="mailto:"]').all();
+      for (const el of mailtoLinks) {
+        const h = await el.getAttribute('href');
+        if (h) {
+          const e = h.replace('mailto:', '').split('?')[0].trim();
+          if (e && e.includes('@')) emails.add(e);
         }
-      } catch {}
-    }
+      }
 
-    if (emails.size < 1) {
-      try {
-        const wp = await ctx.newPage();
+      const telLinks = await page.locator('a[href^="tel:"]').all();
+      for (const el of telLinks) {
+        const h = await el.getAttribute('href');
+        if (h) {
+          const num = h.replace('tel:', '').split(/[;,#]/)[0].trim().replace(/[^\d+]/g, '');
+          if (num.length >= 10) phones.push(num);
+        }
+      }
+
+      if (emails.size < 1) {
         try {
-          await wp.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
-          await new Promise(r => setTimeout(r, 1000));
-          await wp.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
-          await new Promise(r => setTimeout(r, 500));
-          const text = await wp.evaluate(() => document.body.innerText || '');
-          const html = await wp.evaluate(() => document.documentElement.outerHTML || '');
-          for (const em of extractEmails(text)) emails.add(em);
-          for (const em of extractEmails(html)) emails.add(em);
-          const mails = await wp.locator('a[href^="mailto:"]').all();
-          for (const el of mails) {
-            const h = await el.getAttribute('href');
-            if (h) { const e = h.replace('mailto:', '').split('?')[0].trim(); if (e && e.includes('@')) emails.add(e); }
+          const baseUrl = `${new URL(url).protocol}//${new URL(url).host}`;
+          for (const p of ['/contact', '/about', '/contact-us', '/about-us']) {
+            if (emails.size >= 3) break;
+            try {
+              await page.goto(baseUrl + p, { waitUntil: 'domcontentloaded', timeout: 10000 });
+              await page.waitForTimeout(800);
+              const subText = await page.evaluate(() => document.body.innerText || '');
+              const subHtml = await page.evaluate(() => document.documentElement.outerHTML || '');
+              for (const e of extractEmails(subText)) emails.add(e);
+              for (const e of extractEmails(subHtml)) emails.add(e);
+            } catch {}
           }
         } catch {}
-        await wp.close();
-      } catch {}
-    }
+      }
+    } catch {}
+    await page.close();
+    await ctx.close();
   } catch {}
   return { phones: phones.slice(0, 3), emails: [...emails].slice(0, 5) };
 }
 
 async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, currentTotal, seenPhones, seenNameCity, onProgress) {
-  const timeout = 120000;
-  const timer = new Promise((_, reject) => setTimeout(() => reject(new Error(`City ${city} timed out after ${timeout/1000}s`)), timeout));
+  const timeout = 180000;
+  const timer = new Promise((_, reject) => setTimeout(() => reject(new Error(`City ${city} timed out`)), timeout));
   const work = (async () => {
   let ctx;
   let page;
@@ -178,26 +168,22 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
     const searchUrl = `https://www.google.com/maps/search/${query}+in+${city},+${state}/`;
 
     if (onProgress) onProgress('status', { message: `Searching Maps for ${city}...` });
-    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(async (err) => {
-      console.error(`[MAPS] ${city}: first goto failed: ${err.message}, retrying...`);
-      await randSleep(1.0, 2.0);
+    try {
       await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-    });
-    await randSleep(1.5, 2.5);
+    } catch {
+      await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+    }
+    await page.waitForTimeout(1000);
 
     let cards = page.locator('[class*="Nv2PK"]');
     let cardCount = 0;
-    try {
-      cardCount = await cards.count();
-    } catch {}
+    try { cardCount = await cards.count(); } catch {}
 
     if (cardCount === 0) {
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-      await randSleep(1.0, 2.0);
+      await page.waitForTimeout(1000);
       cards = page.locator('[class*="Nv2PK"]');
-      try {
-        cardCount = await cards.count();
-      } catch {}
+      try { cardCount = await cards.count(); } catch {}
     }
 
     if (cardCount === 0) {
@@ -212,9 +198,9 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
     if (cardCount === 0) return results;
 
     let prevCount = 0;
-    for (let s = 0; s < 10; s++) {
+    for (let s = 0; s < 8; s++) {
       try { await page.evaluate(() => document.querySelector('[role=feed]')?.scrollBy(0, 2000)); } catch {}
-      await randSleep(0.3, 0.5);
+      await page.waitForTimeout(300);
       try {
         const cur = await cards.count();
         if (s > 2 && cur === prevCount) break;
@@ -222,7 +208,7 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
       } catch { break; }
     }
 
-    await randSleep(0.5, 1.0);
+    await page.waitForTimeout(500);
     cards = page.locator('[class*="Nv2PK"]');
     const total = Math.min(await cards.count(), maxCount, maxTotal - currentTotal);
     if (total <= 0) return results;
@@ -255,13 +241,13 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
         seenNameCity.add(nameCityKey);
 
         await cards.nth(i).click();
-        await randSleep(0.3, 0.6);
+        await page.waitForTimeout(300);
 
         const emails = [];
         let website = '';
         try {
           await page.keyboard.press('Escape');
-          await randSleep(0.1, 0.2);
+          await page.waitForTimeout(100);
           const bodyText = await page.evaluate(() => document.body.innerText);
 
           for (const e of extractEmails(bodyText)) if (!emails.includes(e)) emails.push(e);
@@ -325,13 +311,13 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
           } catch {}
         }
 
-        if (website && website.startsWith('http')) {
+        if (website && website.startsWith('http') && emails.length < 3) {
           try {
-            const { phones: sp, emails: se } = await fetchWebsiteData(ctx, website);
+            const { phones: sp, emails: se } = await scrapeWebsiteEmails(browser, website);
             for (const e of se) if (!emails.find(x => x.toLowerCase() === e.toLowerCase())) emails.push(e);
             for (const p of sp) if (!phones.includes(p)) phones.push(p);
           } catch (err) {
-            console.error(`[WEBSITE] ${name}: fetchWebsiteData failed: ${err.message}`);
+            console.error(`[WEBSITE] ${name}: ${err.message}`);
           }
         }
 
@@ -348,7 +334,6 @@ async function scrapeCity(browser, city, state, niche, maxCount, maxTotal, curre
         };
         results.push(entry);
         if (onProgress) onProgress('business', { entry });
-        await randSleep(0.2, 0.4);
       } catch {}
     }
   } catch {} finally {
@@ -391,7 +376,7 @@ async function runScraper({ state, cities, niche, maxPerCity, maxTotal, onProgre
 
   if (onProgress) onProgress('status', { message: 'Browser ready, starting scrape...' });
   try {
-    const parallel = 1;
+    const parallel = 3;
     for (let i = 0; i < cities.length; i += parallel) {
       if (allResults.length >= maxTotal) break;
       const batch = cities.slice(i, i + parallel);
