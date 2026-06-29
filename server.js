@@ -45,6 +45,19 @@ if (chromiumDir) {
   }
 }
 
+try {
+  execSync('python3 -c "import playwright; import scrapling"', { stdio: 'pipe', timeout: 10000 });
+  console.log('Python deps OK');
+} catch {
+  console.log('Installing Python deps...');
+  try {
+    execSync('python3 -m pip install -r requirements.txt', { stdio: 'inherit', timeout: 120000 });
+    console.log('Python deps installed');
+  } catch (e) {
+    console.error('Python dep install failed:', e.message);
+  }
+}
+
 const app = express();
 app.set('trust proxy', 1);
 
