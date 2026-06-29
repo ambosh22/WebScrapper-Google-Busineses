@@ -45,6 +45,7 @@ if (chromiumDir) {
   }
 }
 
+// Ensure Python deps and browsers are installed (using same python3 as runtime)
 try {
   execSync('python3 -c "import playwright; import scrapling"', { stdio: 'pipe', timeout: 10000 });
   console.log('Python deps OK');
@@ -56,6 +57,13 @@ try {
   } catch (e) {
     console.error('Python dep install failed:', e.message);
   }
+}
+// Always ensure Python Playwright browsers are installed (handles version mismatch with npx)
+try {
+  execSync('python3 -m playwright install chromium 2>&1', { stdio: 'inherit', timeout: 180000 });
+  console.log('Python Playwright browsers OK');
+} catch (e) {
+  console.error('Python Playwright browser install failed:', e.message);
 }
 
 const app = express();
