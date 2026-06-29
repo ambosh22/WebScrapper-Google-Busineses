@@ -20,18 +20,29 @@ function findChromiumDir(basePath) {
   try {
     if (!fs.existsSync(basePath)) return null;
     const entries = fs.readdirSync(basePath);
-    const found = entries.find(e => e.startsWith('chromium'));
+    const found = entries.find(e => e.startsWith('chromium') && !e.includes('headless'));
     return found ? path.join(basePath, found) : null;
   } catch {
     return null;
   }
 }
 
-PW_BROWSERS_READY = !!findChromiumDir(PW_BROWSERS_PATH);
-if (PW_BROWSERS_READY) {
-  console.log(`Chromium found at ${findChromiumDir(PW_BROWSERS_PATH)}`);
+const chromiumDir = findChromiumDir(PW_BROWSERS_PATH);
+if (chromiumDir) {
+  console.log(`Playwright chromium found at ${chromiumDir}`);
+  PW_BROWSERS_READY = true;
 } else {
-  console.log('No Chromium found — will be installed by Python scraper on first run');
+  console.log('Playwright chromium not found — installing synchronously...');
+  try {
+    execSync(
+      `PLAYWRIGHT_BROWSERS_PATH=${PW_BROWSERS_PATH} npx playwright install chromium`,
+      { stdio: 'inherit', timeout: 180000 }
+    );
+    console.log('Playwright chromium installed');
+    PW_BROWSERS_READY = true;
+  } catch (err) {
+    console.error('Playwright install failed:', err.message);
+  }
 }
 
 // Ensure Python deps are installed
