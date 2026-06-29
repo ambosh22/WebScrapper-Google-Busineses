@@ -150,7 +150,8 @@ def fetch_single_page(target, timeout):
     if Fetcher:
         try:
             resp = Fetcher.get(target, impersonate='chrome', timeout=timeout, follow_redirects=True)
-            html = resp.body.decode('utf-8', errors='ignore')
+            raw = resp.body
+            html = raw.decode('utf-8', errors='ignore') if isinstance(raw, bytes) else str(raw)
             return extract_contacts_from_html(html)
         except:
             pass
@@ -186,7 +187,9 @@ async def fetch_website_data_fast(url, timeout=15):
                 try:
                     resp = await AsyncFetcher.get(target, timeout=timeout, retries=1)
                     if resp and resp.status == 200:
-                        return extract_contacts_from_html(resp.body.decode('utf-8', errors='ignore'))
+                        raw = resp.body
+                        html = raw.decode('utf-8', errors='ignore') if isinstance(raw, bytes) else str(raw)
+                        return extract_contacts_from_html(html)
                 except:
                     pass
                 return [], []

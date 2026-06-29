@@ -454,7 +454,9 @@ function runScraperProcess(state, cities, niche, maxPerCity, jobId, maxTotal = 1
           } else if (data.type === 'success') {
             logEntry(jobId, data.message, 'success');
           }
-        } catch {}
+        } catch {
+          logEntry(jobId, line, 'error');
+        }
       }
     });
 
